@@ -2,6 +2,7 @@ package state
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -30,6 +31,10 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		State:     "open",
 		Title:     "a title",
 		LastSeen:  now,
+		Labels:    []string{"bug", "triage"},
+		Assignees: []string{"alice"},
+		Milestone: "v2.0",
+		BodyHash:  "abcd1234",
 	}
 	if err := Save(path, st); err != nil {
 		t.Fatal(err)
@@ -42,7 +47,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if firstRun {
 		t.Error("existing file should not report firstRun")
 	}
-	if got.Issues["owner/repo#1"] != st.Issues["owner/repo#1"] {
+	if !reflect.DeepEqual(got.Issues["owner/repo#1"], st.Issues["owner/repo#1"]) {
 		t.Errorf("round trip mismatch: got %+v want %+v", got.Issues["owner/repo#1"], st.Issues["owner/repo#1"])
 	}
 }

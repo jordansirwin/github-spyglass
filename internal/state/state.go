@@ -25,6 +25,14 @@ type IssueState struct {
 	State     string    `json:"state"`
 	Title     string    `json:"title"`
 	LastSeen  time.Time `json:"last_seen"`
+
+	// Snapshot fields diffed between polls to describe what changed. An
+	// empty BodyHash marks an entry written before these fields existed,
+	// in which case they aren't diffed.
+	Labels    []string `json:"labels,omitempty"`
+	Assignees []string `json:"assignees,omitempty"`
+	Milestone string   `json:"milestone,omitempty"`
+	BodyHash  string   `json:"body_hash,omitempty"`
 }
 
 // New returns an empty state.

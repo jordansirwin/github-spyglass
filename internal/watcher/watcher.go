@@ -4,6 +4,9 @@ package watcher
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -71,6 +74,10 @@ func (w *Watcher) Poll(ctx context.Context, st *state.State, seedOnly bool) erro
 			State:     issue.State,
 			Title:     issue.Title,
 			LastSeen:  now,
+			Labels:    issue.LabelNames(),
+			Assignees: issue.AssigneeLogins(),
+			Milestone: issue.MilestoneTitle(),
+			BodyHash:  hashBody(issue.Body),
 		}
 
 		switch {
@@ -107,7 +114,10 @@ func (w *Watcher) Poll(ctx context.Context, st *state.State, seedOnly bool) erro
 				reported = true
 			}
 
-			if !reported {
+			if changes := describeChanges(prev, issue); len(changes) > 0 {
+				notify("Updated: "+key, truncate(issue.Title, 60),
+					condense(strings.Join(changes, ", "), 200), issue.HTMLURL)
+			} else if !reported {
 				notify("Updated: "+key, truncate(issue.Title, 60),
 					"Issue was edited, labeled, or otherwise changed", issue.HTMLURL)
 			}
@@ -118,6 +128,75 @@ func (w *Watcher) Poll(ctx context.Context, st *state.State, seedOnly bool) erro
 
 	st.Prune(now)
 	return nil
+}
+
+// describeChanges compares the issue against its previous snapshot and
+// returns human-readable descriptions of what changed. State (open/closed)
+// and comments are handled separately by Poll.
+func describeChanges(prev state.IssueState, issue github.Issue) []string {
+	var changes []string
+	if prev.Title != "" && prev.Title != issue.Title {
+		changes = append(changes, fmt.Sprintf("renamed to %q", issue.Title))
+	}
+	if prev.BodyHash == "" {
+		// Entry predates snapshot fields; nothing more to diff against.
+		return changes
+	}
+	if added, removed := diffSet(prev.Labels, issue.LabelNames()); len(added)+len(removed) > 0 {
+		changes = append(changes, "labels "+joinSigned(added, removed))
+	}
+	if added, removed := diffSet(prev.Assignees, issue.AssigneeLogins()); len(added)+len(removed) > 0 {
+		changes = append(changes, "assignees "+joinSigned(added, removed))
+	}
+	if cur := issue.MilestoneTitle(); cur != prev.Milestone {
+		if cur == "" {
+			changes = append(changes, "milestone removed")
+		} else {
+			changes = append(changes, "milestone set to "+cur)
+		}
+	}
+	if hashBody(issue.Body) != prev.BodyHash {
+		changes = append(changes, "description edited")
+	}
+	return changes
+}
+
+// diffSet returns the elements added to and removed from old, in input order.
+func diffSet(old, cur []string) (added, removed []string) {
+	oldSet := make(map[string]bool, len(old))
+	for _, s := range old {
+		oldSet[s] = true
+	}
+	curSet := make(map[string]bool, len(cur))
+	for _, s := range cur {
+		curSet[s] = true
+		if !oldSet[s] {
+			added = append(added, s)
+		}
+	}
+	for _, s := range old {
+		if !curSet[s] {
+			removed = append(removed, s)
+		}
+	}
+	return added, removed
+}
+
+// joinSigned renders additions and removals as "+a +b -c".
+func joinSigned(added, removed []string) string {
+	parts := make([]string, 0, len(added)+len(removed))
+	for _, s := range added {
+		parts = append(parts, "+"+s)
+	}
+	for _, s := range removed {
+		parts = append(parts, "-"+s)
+	}
+	return strings.Join(parts, " ")
+}
+
+func hashBody(body string) string {
+	sum := sha256.Sum256([]byte(body))
+	return hex.EncodeToString(sum[:8])
 }
 
 func capitalize(s string) string {

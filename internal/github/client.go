@@ -35,17 +35,57 @@ type User struct {
 	Login string `json:"login"`
 }
 
+// Label is an issue label.
+type Label struct {
+	Name string `json:"name"`
+}
+
+// Milestone is an issue milestone.
+type Milestone struct {
+	Title string `json:"title"`
+}
+
 // Issue is a search result item. The search endpoint returns both issues and
 // pull requests; add "is:issue" to the filter to exclude PRs.
 type Issue struct {
-	Number        int       `json:"number"`
-	Title         string    `json:"title"`
-	HTMLURL       string    `json:"html_url"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	Comments      int       `json:"comments"`
-	State         string    `json:"state"`
-	RepositoryURL string    `json:"repository_url"`
-	User          User      `json:"user"`
+	Number        int        `json:"number"`
+	Title         string     `json:"title"`
+	Body          string     `json:"body"`
+	HTMLURL       string     `json:"html_url"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	Comments      int        `json:"comments"`
+	State         string     `json:"state"`
+	RepositoryURL string     `json:"repository_url"`
+	User          User       `json:"user"`
+	Labels        []Label    `json:"labels"`
+	Assignees     []User     `json:"assignees"`
+	Milestone     *Milestone `json:"milestone"`
+}
+
+// LabelNames returns the issue's label names. Never nil.
+func (i Issue) LabelNames() []string {
+	names := make([]string, 0, len(i.Labels))
+	for _, l := range i.Labels {
+		names = append(names, l.Name)
+	}
+	return names
+}
+
+// AssigneeLogins returns the issue's assignee logins. Never nil.
+func (i Issue) AssigneeLogins() []string {
+	logins := make([]string, 0, len(i.Assignees))
+	for _, u := range i.Assignees {
+		logins = append(logins, u.Login)
+	}
+	return logins
+}
+
+// MilestoneTitle returns the milestone title, or "" when there is none.
+func (i Issue) MilestoneTitle() string {
+	if i.Milestone == nil {
+		return ""
+	}
+	return i.Milestone.Title
 }
 
 // Repo returns "owner/name", derived from the API repository URL.

@@ -232,6 +232,101 @@ func TestNotificationCap(t *testing.T) {
 	}
 }
 
+func TestLabelAndAssigneeChangeNotifies(t *testing.T) {
+	before := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	issue := testIssue(1, before, 0, "open")
+	issue.Labels = []github.Label{{Name: "bug"}, {Name: "needs-info"}}
+	issue.Assignees = []github.User{{Login: "bob"}}
+
+	gh := &fakeGitHub{issues: []github.Issue{issue}}
+	n := &fakeNotifier{}
+	st := state.New()
+	w := newWatcher(gh, n)
+	ctx := context.Background()
+
+	if err := w.Poll(ctx, st, true); err != nil {
+		t.Fatal(err)
+	}
+
+	changed := testIssue(1, before.Add(time.Minute), 0, "open")
+	changed.Labels = []github.Label{{Name: "bug"}, {Name: "triage"}}
+	changed.Assignees = []github.User{{Login: "bob"}, {Login: "alice"}}
+	gh.issues = []github.Issue{changed}
+	if err := w.Poll(ctx, st, false); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(n.sent) != 1 {
+		t.Fatalf("got %d notifications, want 1: %+v", len(n.sent), n.sent)
+	}
+	got := n.sent[0]
+	if got.title != "Updated: owner/repo#1" {
+		t.Errorf("title = %q", got.title)
+	}
+	if want := "labels +triage -needs-info, assignees +alice"; got.message != want {
+		t.Errorf("message = %q, want %q", got.message, want)
+	}
+}
+
+func TestRenameAndBodyEditNotifies(t *testing.T) {
+	before := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	issue := testIssue(1, before, 0, "open")
+	issue.Body = "original description"
+
+	gh := &fakeGitHub{issues: []github.Issue{issue}}
+	n := &fakeNotifier{}
+	st := state.New()
+	w := newWatcher(gh, n)
+	ctx := context.Background()
+
+	if err := w.Poll(ctx, st, true); err != nil {
+		t.Fatal(err)
+	}
+
+	changed := testIssue(1, before.Add(time.Minute), 0, "open")
+	changed.Title = "A better title"
+	changed.Body = "rewritten description"
+	gh.issues = []github.Issue{changed}
+	if err := w.Poll(ctx, st, false); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(n.sent) != 1 {
+		t.Fatalf("got %d notifications, want 1: %+v", len(n.sent), n.sent)
+	}
+	if want := `renamed to "A better title", description edited`; n.sent[0].message != want {
+		t.Errorf("message = %q, want %q", n.sent[0].message, want)
+	}
+}
+
+func TestLegacyStateEntrySkipsSnapshotDiff(t *testing.T) {
+	before := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	issue := testIssue(1, before.Add(time.Minute), 0, "open")
+	issue.Labels = []github.Label{{Name: "bug"}}
+
+	gh := &fakeGitHub{issues: []github.Issue{issue}}
+	n := &fakeNotifier{}
+	// Simulate a state entry written before snapshot fields existed.
+	st := state.New()
+	st.Issues["owner/repo#1"] = state.IssueState{
+		UpdatedAt: before,
+		State:     "open",
+		Title:     issue.Title,
+		LastSeen:  before,
+	}
+
+	if err := newWatcher(gh, n).Poll(context.Background(), st, false); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(n.sent) != 1 {
+		t.Fatalf("got %d notifications, want 1: %+v", len(n.sent), n.sent)
+	}
+	if want := "Issue was edited, labeled, or otherwise changed"; n.sent[0].message != want {
+		t.Errorf("message = %q, want generic fallback %q", n.sent[0].message, want)
+	}
+}
+
 func TestCondense(t *testing.T) {
 	for _, tc := range []struct {
 		in, want string
