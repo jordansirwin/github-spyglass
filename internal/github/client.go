@@ -1,4 +1,6 @@
-package main
+// Package github is a minimal GitHub REST API client covering issue search
+// and issue comments.
+package github
 
 import (
 	"context"
@@ -16,16 +18,21 @@ const apiBase = "https://api.github.com"
 // maxSearchPages caps pagination of search results (100 per page).
 const maxSearchPages = 3
 
-type GitHubClient struct {
+type Client struct {
 	http  *http.Client
 	token string
 }
 
-func NewGitHubClient(token string) *GitHubClient {
-	return &GitHubClient{
+func New(token string) *Client {
+	return &Client{
 		http:  &http.Client{Timeout: 30 * time.Second},
 		token: token,
 	}
+}
+
+// User is the author of an issue or comment.
+type User struct {
+	Login string `json:"login"`
 }
 
 // Issue is a search result item. The search endpoint returns both issues and
@@ -38,9 +45,7 @@ type Issue struct {
 	Comments      int       `json:"comments"`
 	State         string    `json:"state"`
 	RepositoryURL string    `json:"repository_url"`
-	User          struct {
-		Login string `json:"login"`
-	} `json:"user"`
+	User          User      `json:"user"`
 }
 
 // Repo returns "owner/name", derived from the API repository URL.
@@ -60,14 +65,12 @@ type Comment struct {
 	HTMLURL   string    `json:"html_url"`
 	Body      string    `json:"body"`
 	CreatedAt time.Time `json:"created_at"`
-	User      struct {
-		Login string `json:"login"`
-	} `json:"user"`
+	User      User      `json:"user"`
 }
 
 // SearchIssues returns all issues matching the search filter, paginating up
 // to maxSearchPages pages sorted by most recently updated.
-func (c *GitHubClient) SearchIssues(ctx context.Context, query string) ([]Issue, error) {
+func (c *Client) SearchIssues(ctx context.Context, query string) ([]Issue, error) {
 	var all []Issue
 	for page := 1; page <= maxSearchPages; page++ {
 		q := url.Values{
@@ -94,7 +97,7 @@ func (c *GitHubClient) SearchIssues(ctx context.Context, query string) ([]Issue,
 }
 
 // CommentsSince returns comments on the issue created at or after since.
-func (c *GitHubClient) CommentsSince(ctx context.Context, issue Issue, since time.Time) ([]Comment, error) {
+func (c *Client) CommentsSince(ctx context.Context, issue Issue, since time.Time) ([]Comment, error) {
 	u := fmt.Sprintf("%s/repos/%s/issues/%d/comments?per_page=100&since=%s",
 		apiBase, issue.Repo(), issue.Number, url.QueryEscape(since.UTC().Format(time.RFC3339)))
 	var comments []Comment
@@ -112,7 +115,7 @@ func (c *GitHubClient) CommentsSince(ctx context.Context, issue Issue, since tim
 	return fresh, nil
 }
 
-func (c *GitHubClient) get(ctx context.Context, rawURL string, out any) error {
+func (c *Client) get(ctx context.Context, rawURL string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err

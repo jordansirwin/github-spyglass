@@ -1,4 +1,5 @@
-package main
+// Package notify sends macOS notifications.
+package notify
 
 import (
 	"fmt"
@@ -17,7 +18,7 @@ type Notifier struct {
 	terminalNotifier string
 }
 
-func NewNotifier() *Notifier {
+func New() *Notifier {
 	tn, _ := exec.LookPath("terminal-notifier")
 	if tn != "" {
 		log.Printf("using terminal-notifier (%s)", tn)

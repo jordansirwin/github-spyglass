@@ -1,4 +1,5 @@
-package main
+// Package state persists what the watcher has seen between polls.
+package state
 
 import (
 	"encoding/json"
@@ -26,12 +27,17 @@ type IssueState struct {
 	LastSeen  time.Time `json:"last_seen"`
 }
 
-// LoadState reads the state file. firstRun is true when no state file exists
-// yet, meaning the first poll should seed state without notifying.
-func LoadState(path string) (state *State, firstRun bool, err error) {
+// New returns an empty state.
+func New() *State {
+	return &State{Issues: map[string]IssueState{}}
+}
+
+// Load reads the state file. firstRun is true when no state file exists yet,
+// meaning the first poll should seed state without notifying.
+func Load(path string) (st *State, firstRun bool, err error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return &State{Issues: map[string]IssueState{}}, true, nil
+		return New(), true, nil
 	}
 	if err != nil {
 		return nil, false, err
@@ -46,11 +52,13 @@ func LoadState(path string) (state *State, firstRun bool, err error) {
 	return &s, false, nil
 }
 
-func SaveState(path string, state *State) error {
+// Save writes the state file atomically, creating parent directories as
+// needed.
+func Save(path string, st *State) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(state, "", "  ")
+	data, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -61,10 +69,20 @@ func SaveState(path string, state *State) error {
 	return os.Rename(tmp, path)
 }
 
+// Prune drops issues that haven't matched the filter recently.
 func (s *State) Prune(now time.Time) {
 	for key, st := range s.Issues {
 		if now.Sub(st.LastSeen) > pruneAfter {
 			delete(s.Issues, key)
 		}
 	}
+}
+
+// DefaultPath returns the default state file location.
+func DefaultPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "github-spyglass-state.json"
+	}
+	return filepath.Join(home, ".github-spyglass", "state.json")
 }

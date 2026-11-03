@@ -45,3 +45,6 @@ Dockerfile
 
 # CSP secrets for local testing 
 docker/secrets
+
+# project binary
+/github-spyglass

@@ -12,7 +12,9 @@ You get notified when a matched issue:
 ## Build
 
 ```bash
-go build .
+make build        # builds ./github-spyglass
+make test         # run unit tests
+make install      # go install into $GOBIN
 ```
 
 ## Usage
