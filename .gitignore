@@ -1,0 +1,47 @@
+# Binaries for programs and plugins
+*.env*
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin
+testbin/*
+__debug_bin
+
+# Test binary, build with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Kubernetes Generated files - skip generated files, except for vendored files
+!vendor/**/zz_generated.*
+
+# editor and IDE paraphernalia
+.idea
+.vscode
+*.swp
+*.sw
+*.iml
+*~
+*.DS_Store
+
+# local config
+config.yaml
+config.overrides.yaml
+
+# not gpctl config
+!.gpctl/config.yaml
+
+# local Dockerfile
+Dockerfile
+
+# API certs for local development/testing
+*.crt
+*.key
+*.srl
+*.csr
+
+# CSP secrets for local testing 
+docker/secrets
