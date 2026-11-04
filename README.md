@@ -22,6 +22,7 @@ A magnifying-glass icon appears in the menu bar. The dropdown shows:
 - **Check Now** / **Pause**
 - **Edit Filter…** — change the search filter (takes effect immediately; the new
   filter's existing issues are seeded silently)
+- **Poll Interval** — pick how often to check (1m–1h, default 5m)
 - **Start at Login** — registers a login item (macOS will ask to allow
   controlling System Events the first time)
 

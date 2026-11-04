@@ -53,11 +53,24 @@ type app struct {
 	checkNow chan struct{}
 	quit     chan struct{}
 
-	status    *systray.MenuItem
-	lastCheck *systray.MenuItem
-	empty     *systray.MenuItem
-	slots     [maxRecent]*systray.MenuItem
-	pause     *systray.MenuItem
+	status         *systray.MenuItem
+	lastCheck      *systray.MenuItem
+	empty          *systray.MenuItem
+	slots          [maxRecent]*systray.MenuItem
+	pause          *systray.MenuItem
+	intervalParent *systray.MenuItem
+	intervalItems  []*systray.MenuItem
+}
+
+// intervalPresets are the poll intervals offered in the menu; the default
+// (no config) is 5m via config.PollInterval.
+var intervalPresets = []time.Duration{
+	1 * time.Minute,
+	2 * time.Minute,
+	5 * time.Minute,
+	15 * time.Minute,
+	30 * time.Minute,
+	time.Hour,
 }
 
 func main() {
@@ -132,6 +145,19 @@ func (a *app) onReady() {
 	systray.AddSeparator()
 
 	filter := systray.AddMenuItem("Edit Filter…", "")
+
+	cur := a.cfg.PollInterval()
+	a.intervalParent = systray.AddMenuItem("Poll Interval: "+formatDuration(cur), "")
+	for _, d := range intervalPresets {
+		item := a.intervalParent.AddSubMenuItemCheckbox(formatDuration(d), "", d == cur)
+		a.intervalItems = append(a.intervalItems, item)
+		go func(d time.Duration, item *systray.MenuItem) {
+			for range item.ClickedCh {
+				a.setInterval(d)
+			}
+		}(d, item)
+	}
+
 	login := systray.AddMenuItem("Start at Login", "")
 	if bundlePath() == "" {
 		login.Disable() // not running from a .app bundle
@@ -268,6 +294,37 @@ func (a *app) editFilter() {
 
 	log.Printf("filter changed to %q", query)
 	a.triggerCheck()
+}
+
+// setInterval switches the poll interval, persists it, and restarts the
+// poll timer.
+func (a *app) setInterval(d time.Duration) {
+	a.mu.Lock()
+	a.cfg.Interval = formatDuration(d)
+	if err := a.cfg.Save(a.cfgPath); err != nil {
+		log.Printf("saving config: %v", err)
+	}
+	if a.ticker != nil {
+		a.ticker.Reset(d)
+	}
+	a.mu.Unlock()
+
+	a.intervalParent.SetTitle("Poll Interval: " + formatDuration(d))
+	for i, item := range a.intervalItems {
+		if intervalPresets[i] == d {
+			item.Check()
+		} else {
+			item.Uncheck()
+		}
+	}
+	log.Printf("poll interval set to %s", formatDuration(d))
+}
+
+func formatDuration(d time.Duration) string {
+	if d >= time.Hour && d%time.Hour == 0 {
+		return fmt.Sprintf("%dh", d/time.Hour)
+	}
+	return fmt.Sprintf("%dm", d/time.Minute)
 }
 
 func (a *app) toggleLogin(item *systray.MenuItem) {
