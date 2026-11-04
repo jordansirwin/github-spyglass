@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -209,5 +210,31 @@ func TestCommentsSinceFiltersEditedComments(t *testing.T) {
 	}
 	if comments[0].Body != "genuinely new" || comments[1].Body != "created exactly at since" {
 		t.Errorf("wrong comments kept: %+v", comments)
+	}
+}
+
+func TestUnauthorizedIsErrUnauthorized(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"message": "Bad credentials"}`)
+	}))
+	if _, err := c.SearchIssues(context.Background(), "q"); !errors.Is(err, ErrUnauthorized) {
+		t.Errorf("error = %v, want ErrUnauthorized", err)
+	}
+}
+
+func TestNoTokenDeniedIsErrUnauthorized(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		fmt.Fprint(w, `{"message": "Validation Failed"}`)
+	}))
+	c.SetToken("")
+	if _, err := c.SearchIssues(context.Background(), "q"); !errors.Is(err, ErrUnauthorized) {
+		t.Errorf("without a token, 422 = %v, want ErrUnauthorized", err)
+	}
+	// With a token, a 422 is a real query error, not an auth problem.
+	c.SetToken("tok")
+	if _, err := c.SearchIssues(context.Background(), "q"); errors.Is(err, ErrUnauthorized) {
+		t.Errorf("with a token, 422 should not be ErrUnauthorized: %v", err)
 	}
 }

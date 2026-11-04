@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -54,9 +55,12 @@ type app struct {
 	paused bool
 	seed   bool // next poll seeds state without notifying
 
+	authFailing bool   // last poll failed with an auth error
 	lastPollErr string // last poll error notified, to avoid repeating it every poll
 
 	watch    *watcher.Watcher
+	gh       *github.Client
+	signIn   *systray.MenuItem // shown while GitHub auth is failing
 	ticker   *time.Ticker
 	checkNow chan struct{}
 	quit     chan struct{}
@@ -122,8 +126,9 @@ func main() {
 		checkNow:  make(chan struct{}, 1),
 		quit:      make(chan struct{}),
 	}
+	a.gh = github.New(github.ResolveToken(cfg.Token))
 	a.watch = &watcher.Watcher{
-		Client:   github.New(github.ResolveToken(cfg.Token)),
+		Client:   a.gh,
 		Notifier: &recordingNotifier{app: a, inner: a.notifier},
 	}
 
@@ -199,6 +204,8 @@ func (a *app) onReady() {
 		}(n, item)
 	}
 
+	a.signIn = systray.AddMenuItem("Sign in to GitHub…", "")
+	a.signIn.Hide()
 	login := systray.AddMenuItemCheckbox("Start at Login", "", false)
 	if bundle := bundlePath(); bundle == "" {
 		login.Disable() // not running from a .app bundle
@@ -235,6 +242,8 @@ func (a *app) onReady() {
 				a.togglePause()
 			case <-filter.ClickedCh:
 				a.editFilter()
+			case <-a.signIn.ClickedCh:
+				a.signInToGitHub()
 			case <-login.ClickedCh:
 				a.toggleLogin(login)
 			case <-testNotif.ClickedCh:
@@ -300,13 +309,35 @@ func (a *app) poll(ctx context.Context) {
 	st := a.st
 	a.mu.Unlock()
 
+	// After an auth failure, pick up a token that may have been refreshed
+	// (e.g. by `gh auth login`) since the last poll.
+	a.mu.Lock()
+	authFailing := a.authFailing
+	a.mu.Unlock()
+	if authFailing {
+		a.gh.SetToken(github.ResolveToken(a.cfg.Token))
+	}
+
 	cctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	if err := a.watch.Poll(cctx, st, seed); err != nil {
+		a.mu.Lock()
+		a.authFailing = errors.Is(err, github.ErrUnauthorized)
+		a.mu.Unlock()
+		if errors.Is(err, github.ErrUnauthorized) {
+			a.reportAuthError(err)
+			a.status.SetTitle("⚠ GitHub sign-in required")
+			a.signIn.Show()
+			return
+		}
 		a.reportPollError(err)
 		a.status.SetTitle("⚠ " + truncate(err.Error(), 70))
 		return
 	}
+	a.mu.Lock()
+	a.authFailing = false
+	a.mu.Unlock()
+	a.signIn.Hide()
 	a.clearPollError()
 	a.status.SetTitle("Watching: " + truncate(a.watch.Query, 50))
 	a.lastCheck.SetTitle("Last check: " + time.Now().Format("15:04:05"))
@@ -337,6 +368,50 @@ func (a *app) reportPollError(err error) {
 		return
 	}
 	a.reportError("poll failed", err)
+}
+
+// reportAuthError tells the user, once per failure streak, how to sign in.
+func (a *app) reportAuthError(err error) {
+	a.mu.Lock()
+	repeat := a.lastPollErr == err.Error()
+	a.lastPollErr = err.Error()
+	a.mu.Unlock()
+	log.Printf("poll failed: %v", err)
+	if repeat {
+		return
+	}
+	msg := "Your GitHub token is missing or invalid. Click the menu bar icon and choose “Sign in to GitHub…”."
+	if github.FindGH() == "" {
+		msg = "Your GitHub token is missing or invalid, and the gh CLI wasn't found. Install it (brew install gh) or set \"token\" in config.json."
+	}
+	if nerr := a.notifier.Notify("GitHub Spyglass", "GitHub sign-in required", msg, ""); nerr != nil {
+		log.Printf("auth notification: %v", nerr)
+	}
+}
+
+// signInToGitHub runs `gh auth login` in Terminal. GITHUB_TOKEN/GH_TOKEN are
+// cleared for that command because gh refuses to store credentials while
+// they're set. The next poll picks up the new token.
+func (a *app) signInToGitHub() {
+	gh := github.FindGH()
+	if gh == "" {
+		a.reportError("signing in", errors.New("gh CLI not found; install it with: brew install gh"))
+		return
+	}
+	cmd := fmt.Sprintf("env -u GITHUB_TOKEN -u GH_TOKEN %s auth login -h github.com -w", shellQuote(gh))
+	script := fmt.Sprintf(`tell application "Terminal"
+	activate
+	do script %s
+end tell`, appleScriptString(cmd))
+	if err := exec.Command("osascript", "-e", script).Run(); err != nil {
+		a.reportError("signing in", err)
+		return
+	}
+	log.Printf("opened Terminal for gh auth login")
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func (a *app) clearPollError() {

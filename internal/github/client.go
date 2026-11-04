@@ -5,6 +5,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,8 +24,13 @@ const apiBase = "https://api.github.com"
 // maxSearchPages caps pagination of search results (100 per page).
 const maxSearchPages = 3
 
+// ErrUnauthorized means GitHub rejected the request's credentials (HTTP 401),
+// or none were available.
+var ErrUnauthorized = errors.New("GitHub token is invalid or missing")
+
 type Client struct {
 	http    *http.Client
+	mu      sync.RWMutex
 	token   string
 	baseURL string // apiBase, overridden in tests
 }
@@ -34,6 +41,13 @@ func New(token string) *Client {
 		token:   token,
 		baseURL: apiBase,
 	}
+}
+
+// SetToken replaces the token used for subsequent requests.
+func (c *Client) SetToken(token string) {
+	c.mu.Lock()
+	c.token = token
+	c.mu.Unlock()
 }
 
 // ResolveToken returns the first available GitHub token: the explicit one,
@@ -47,7 +61,7 @@ func ResolveToken(explicit string) string {
 			return v
 		}
 	}
-	if gh := findGH(); gh != "" {
+	if gh := FindGH(); gh != "" {
 		out, err := exec.Command(gh, "auth", "token").Output()
 		if err == nil {
 			return strings.TrimSpace(string(out))
@@ -59,10 +73,10 @@ func ResolveToken(explicit string) string {
 	return ""
 }
 
-// findGH locates the gh CLI. Apps launched from Finder or at login get a
+// FindGH locates the gh CLI. Apps launched from Finder or at login get a
 // minimal PATH without Homebrew, so well-known install locations are tried
 // after PATH.
-func findGH() string {
+func FindGH() string {
 	if gh, err := exec.LookPath("gh"); err == nil {
 		return gh
 	}
@@ -207,8 +221,11 @@ func (c *Client) get(ctx context.Context, rawURL string, out any) error {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", "github-spyglass")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	c.mu.RLock()
+	token := c.token
+	c.mu.RUnlock()
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := c.http.Do(req)
@@ -232,6 +249,12 @@ func (c *Client) get(ctx context.Context, rawURL string, out any) error {
 					time.Unix(sec, 0).Local().Format("15:04:05"))
 			}
 			return fmt.Errorf("GitHub rate limit exceeded")
+		}
+		// With no token at all, a private repo shows up as 404/422 rather than 401.
+		noTokenDenied := token == "" &&
+			(resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusUnprocessableEntity)
+		if resp.StatusCode == http.StatusUnauthorized || noTokenDenied {
+			return fmt.Errorf("%w (GitHub API %s)", ErrUnauthorized, resp.Status)
 		}
 		return fmt.Errorf("GitHub API %s: %s: %s", resp.Status, rawURL, msg)
 	}
