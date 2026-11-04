@@ -19,13 +19,14 @@ install:
 	go install ./cmd/github-spyglass
 
 ICONSET := build/AppIcon.iconset
+ICON := cmd/github-spyglass-app/icon.png
 
 app:
 	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
 	go build -o "$(APP)/Contents/MacOS/github-spyglass-app" ./cmd/github-spyglass-app
 	cp packaging/Info.plist "$(APP)/Contents/Info.plist"
 	rm -rf $(ICONSET) && mkdir -p $(ICONSET)
-	go run ./tools/genicon build/icon-1024.png 1024
+	sips -z 1024 1024 $(ICON) --out build/icon-1024.png >/dev/null
 	sips -z 16 16 build/icon-1024.png --out $(ICONSET)/icon_16x16.png >/dev/null
 	sips -z 32 32 build/icon-1024.png --out $(ICONSET)/icon_16x16@2x.png >/dev/null
 	sips -z 32 32 build/icon-1024.png --out $(ICONSET)/icon_32x32.png >/dev/null

@@ -15,7 +15,7 @@ You get notified when a matched issue:
 make run-app      # build GitHub Spyglass.app, install to ~/Applications, launch
 ```
 
-A magnifying-glass icon appears in the menu bar. The dropdown shows:
+The GitHub Spyglass icon appears in the menu bar. The dropdown shows:
 
 - the filter being watched and the last check time
 - the **most recent updates** — click one to open the issue in your browser
