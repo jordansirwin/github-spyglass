@@ -50,6 +50,19 @@ func (c *Client) SetToken(token string) {
 	c.mu.Unlock()
 }
 
+// CheckAuth verifies the client's token by fetching the authenticated user.
+// It returns ErrUnauthorized when GitHub rejects the token.
+func (c *Client) CheckAuth(ctx context.Context) error {
+	var u User
+	if err := c.get(ctx, c.baseURL+"/user", &u); err != nil {
+		return err
+	}
+	if u.Login == "" {
+		return ErrUnauthorized
+	}
+	return nil
+}
+
 // ResolveToken returns the first available GitHub token: the explicit one,
 // $GITHUB_TOKEN, $GH_TOKEN, or the gh CLI's stored token. Empty when none.
 func ResolveToken(explicit string) string {
@@ -61,7 +74,7 @@ func ResolveToken(explicit string) string {
 			return v
 		}
 	}
-	if gh := FindGH(); gh != "" {
+	if gh := findGH(); gh != "" {
 		out, err := exec.Command(gh, "auth", "token").Output()
 		if err == nil {
 			return strings.TrimSpace(string(out))
@@ -73,10 +86,10 @@ func ResolveToken(explicit string) string {
 	return ""
 }
 
-// FindGH locates the gh CLI. Apps launched from Finder or at login get a
+// findGH locates the gh CLI. Apps launched from Finder or at login get a
 // minimal PATH without Homebrew, so well-known install locations are tried
 // after PATH.
-func FindGH() string {
+func findGH() string {
 	if gh, err := exec.LookPath("gh"); err == nil {
 		return gh
 	}

@@ -13,6 +13,14 @@ You get notified when a matched issue:
 - is otherwise **edited** (title, body, labels, assignees, ...)
 - **newly matches** the filter
 
+## Screenshots
+
+<!-- Put images in docs/screenshots/ and reference them like:
+<p align="center">
+  <img src="docs/screenshots/menu.png" alt="The GitHub Spyglass menu" width="420">
+</p>
+-->
+
 ## Menu bar app
 
 ```bash
@@ -27,10 +35,11 @@ The GitHub Spyglass icon appears in the menu bar. The dropdown shows:
 - **Edit Filter…** — change the search filter (takes effect immediately; the new
   filter's existing issues are seeded silently)
 - **Poll Interval** — pick how often to check (1m–1h, default 5m)
-- **Recent Updates** — how many updates the dropdown shows (5/10/25/50,
+- **Show Recent Updates** — how many updates the dropdown shows (5/10/25/50,
   default 10)
-- **Start at Login** — registers a login item (macOS will ask to allow
-  controlling System Events the first time)
+- **Settings** — **Set GitHub Token…** (paste a personal access token; saved to
+  `~/.github-spyglass/token`) and **Start at Login** (registers a login item;
+  macOS will ask to allow controlling System Events the first time)
 - **Debug** — send a test notification, open the log/config/state files or
   the data folder, jump to macOS notification settings
 

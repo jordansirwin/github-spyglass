@@ -238,3 +238,25 @@ func TestNoTokenDeniedIsErrUnauthorized(t *testing.T) {
 		t.Errorf("with a token, 422 should not be ErrUnauthorized: %v", err)
 	}
 }
+
+func TestCheckAuth(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/user" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer good" {
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"message": "Bad credentials"}`)
+			return
+		}
+		fmt.Fprint(w, `{"login": "alice"}`)
+	}))
+	c.SetToken("good")
+	if err := c.CheckAuth(context.Background()); err != nil {
+		t.Errorf("good token: %v", err)
+	}
+	c.SetToken("bad")
+	if err := c.CheckAuth(context.Background()); !errors.Is(err, ErrUnauthorized) {
+		t.Errorf("bad token: err = %v, want ErrUnauthorized", err)
+	}
+}

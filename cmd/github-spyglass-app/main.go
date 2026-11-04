@@ -43,6 +43,7 @@ type app struct {
 	cfgPath   string
 	statePath string
 	logPath   string
+	tokenPath string
 
 	// notifier delivers directly, bypassing the recent-updates recording
 	// (used by the debug test notification).
@@ -60,7 +61,6 @@ type app struct {
 
 	watch    *watcher.Watcher
 	gh       *github.Client
-	signIn   *systray.MenuItem // shown while GitHub auth is failing
 	ticker   *time.Ticker
 	checkNow chan struct{}
 	quit     chan struct{}
@@ -126,7 +126,8 @@ func main() {
 		checkNow:  make(chan struct{}, 1),
 		quit:      make(chan struct{}),
 	}
-	a.gh = github.New(github.ResolveToken(cfg.Token))
+	a.tokenPath = config.DefaultTokenPath()
+	a.gh = github.New(a.resolveToken())
 	a.watch = &watcher.Watcher{
 		Client:   a.gh,
 		Notifier: &recordingNotifier{app: a, inner: a.notifier},
@@ -193,7 +194,7 @@ func (a *app) onReady() {
 	}
 
 	curRecent := a.cfg.RecentCount()
-	a.recentParent = systray.AddMenuItem(fmt.Sprintf("Recent Updates: %d", curRecent), "")
+	a.recentParent = systray.AddMenuItem(fmt.Sprintf("Show Recent Updates: %d", curRecent), "")
 	for _, n := range recentPresets {
 		item := a.recentParent.AddSubMenuItemCheckbox(fmt.Sprintf("%d", n), "", n == curRecent)
 		a.recentItems = append(a.recentItems, item)
@@ -204,9 +205,9 @@ func (a *app) onReady() {
 		}(n, item)
 	}
 
-	a.signIn = systray.AddMenuItem("Sign in to GitHub…", "")
-	a.signIn.Hide()
-	login := systray.AddMenuItemCheckbox("Start at Login", "", false)
+	settings := systray.AddMenuItem("Settings", "")
+	setToken := settings.AddSubMenuItem("Set GitHub Token…", "")
+	login := settings.AddSubMenuItemCheckbox("Start at Login", "", false)
 	if bundle := bundlePath(); bundle == "" {
 		login.Disable() // not running from a .app bundle
 	} else {
@@ -242,8 +243,8 @@ func (a *app) onReady() {
 				a.togglePause()
 			case <-filter.ClickedCh:
 				a.editFilter()
-			case <-a.signIn.ClickedCh:
-				a.signInToGitHub()
+			case <-setToken.ClickedCh:
+				go a.setGitHubToken()
 			case <-login.ClickedCh:
 				a.toggleLogin(login)
 			case <-testNotif.ClickedCh:
@@ -315,7 +316,7 @@ func (a *app) poll(ctx context.Context) {
 	authFailing := a.authFailing
 	a.mu.Unlock()
 	if authFailing {
-		a.gh.SetToken(github.ResolveToken(a.cfg.Token))
+		a.gh.SetToken(a.resolveToken())
 	}
 
 	cctx, cancel := context.WithTimeout(ctx, time.Minute)
@@ -327,7 +328,6 @@ func (a *app) poll(ctx context.Context) {
 		if errors.Is(err, github.ErrUnauthorized) {
 			a.reportAuthError(err)
 			a.status.SetTitle("⚠ GitHub sign-in required")
-			a.signIn.Show()
 			return
 		}
 		a.reportPollError(err)
@@ -337,7 +337,6 @@ func (a *app) poll(ctx context.Context) {
 	a.mu.Lock()
 	a.authFailing = false
 	a.mu.Unlock()
-	a.signIn.Hide()
 	a.clearPollError()
 	a.status.SetTitle("Watching: " + truncate(a.watch.Query, 50))
 	a.lastCheck.SetTitle("Last check: " + time.Now().Format("15:04:05"))
@@ -380,38 +379,95 @@ func (a *app) reportAuthError(err error) {
 	if repeat {
 		return
 	}
-	msg := "Your GitHub token is missing or invalid. Click the menu bar icon and choose “Sign in to GitHub…”."
-	if github.FindGH() == "" {
-		msg = "Your GitHub token is missing or invalid, and the gh CLI wasn't found. Install it (brew install gh) or set \"token\" in config.json."
-	}
+	msg := "Your GitHub token is missing or invalid. Click the menu bar icon and choose “Set GitHub Token…”."
 	if nerr := a.notifier.Notify("GitHub Spyglass", "GitHub sign-in required", msg, ""); nerr != nil {
 		log.Printf("auth notification: %v", nerr)
 	}
 }
 
-// signInToGitHub runs `gh auth login` in Terminal. GITHUB_TOKEN/GH_TOKEN are
-// cleared for that command because gh refuses to store credentials while
-// they're set. The next poll picks up the new token.
-func (a *app) signInToGitHub() {
-	gh := github.FindGH()
-	if gh == "" {
-		a.reportError("signing in", errors.New("gh CLI not found; install it with: brew install gh"))
-		return
+// resolveToken picks the token to use: config.json, then the one entered via
+// "Set GitHub Token…", then whatever the environment or gh provides.
+func (a *app) resolveToken() string {
+	a.mu.Lock()
+	explicit := a.cfg.Token
+	a.mu.Unlock()
+	if explicit != "" {
+		return explicit
 	}
-	cmd := fmt.Sprintf("env -u GITHUB_TOKEN -u GH_TOKEN %s auth login -h github.com -w", shellQuote(gh))
-	script := fmt.Sprintf(`tell application "Terminal"
-	activate
-	do script %s
-end tell`, appleScriptString(cmd))
-	if err := exec.Command("osascript", "-e", script).Run(); err != nil {
-		a.reportError("signing in", err)
-		return
+	if t := config.LoadToken(a.tokenPath); t != "" {
+		return t
 	}
-	log.Printf("opened Terminal for gh auth login")
+	return github.ResolveToken("")
 }
 
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+const newTokenURL = "https://github.com/settings/tokens/new?scopes=repo&description=GitHub%20Spyglass"
+
+// setGitHubToken asks for a personal access token, checks it against GitHub,
+// and stores it for future launches.
+func (a *app) setGitHubToken() {
+	prompt := "Paste a GitHub personal access token with the repo scope.\n\n" +
+		"If your repos are in an organization that uses SSO, authorize the token for it after creating it."
+	// Pre-fill with the token saved by this dialog; the field stays hidden.
+	saved := config.LoadToken(a.tokenPath)
+	for {
+		script := fmt.Sprintf(
+			`display dialog %s default answer %s with hidden answer with title "GitHub Spyglass" buttons {"Cancel", "Create Token…", "Save"} default button "Save"`,
+			appleScriptString(prompt), appleScriptString(saved))
+		// The script goes in on stdin so the token never appears in the
+		// process list.
+		cmd := exec.Command("osascript", "-")
+		cmd.Stdin = strings.NewReader(script)
+		out, err := cmd.Output()
+		if err != nil {
+			return // cancelled
+		}
+		res := string(out)
+		if strings.Contains(res, "button returned:Create Token") {
+			openPath(newTokenURL)
+			continue
+		}
+		const marker = "text returned:"
+		i := strings.Index(res, marker)
+		if i < 0 {
+			return
+		}
+		token := strings.TrimSpace(res[i+len(marker):])
+		if token == "" {
+			return
+		}
+		a.saveGitHubToken(token)
+		return
+	}
+}
+
+func (a *app) saveGitHubToken(token string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := github.New(token).CheckAuth(ctx); err != nil {
+		if errors.Is(err, github.ErrUnauthorized) {
+			a.reportError("setting token", errors.New("GitHub rejected that token. Check that you copied all of it."))
+		} else {
+			a.reportError("setting token", err)
+		}
+		return
+	}
+	if err := config.SaveToken(a.tokenPath, token); err != nil {
+		a.reportError("saving token", err)
+		return
+	}
+	a.mu.Lock()
+	overridden := a.cfg.Token != ""
+	a.mu.Unlock()
+	a.gh.SetToken(a.resolveToken())
+	log.Printf("GitHub token saved")
+	msg := "Checking for updates now."
+	if overridden {
+		msg = "Note: the token in config.json takes precedence over this one."
+	}
+	if err := a.notifier.Notify("GitHub Spyglass", "GitHub token saved", msg, ""); err != nil {
+		log.Printf("token notification: %v", err)
+	}
+	a.triggerCheck()
 }
 
 func (a *app) clearPollError() {
@@ -644,7 +700,7 @@ func (a *app) setRecent(n int) {
 	events := a.visibleEventsLocked()
 	a.mu.Unlock()
 
-	a.recentParent.SetTitle(fmt.Sprintf("Recent Updates: %d", n))
+	a.recentParent.SetTitle(fmt.Sprintf("Show Recent Updates: %d", n))
 	for i, item := range a.recentItems {
 		if recentPresets[i] == n {
 			item.Check()
