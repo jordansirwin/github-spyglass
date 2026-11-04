@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="cmd/github-spyglass-app/icon.png" alt="GitHub Spyglass icon" width="128">
+</p>
+
 # github-spyglass
 
 Watches GitHub issues matching a [search filter](https://docs.github.com/en/search-github/searching-on-github/searching-issues-and-pull-requests) and sends macOS notifications when they change — like GitHub notifications, but for an arbitrary filter instead of just things you're subscribed to.
