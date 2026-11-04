@@ -16,9 +16,11 @@ You get notified when a matched issue:
 ## Screenshots
 
 <strong>Menu bar</strong>
+
 <img src="docs/screenshots/github-spyglass-menubar.png" alt="The GitHub Spyglass menu bar" width="420">
 
 <strong>Notification example</strong>
+
 <img src="docs/screenshots/github-spyglass-notification.png" alt="A GitHub Spyglass notification" width="420">
 
 ## Menu bar app
