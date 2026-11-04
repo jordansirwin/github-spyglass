@@ -15,11 +15,11 @@ You get notified when a matched issue:
 
 ## Screenshots
 
-<!-- Put images in docs/screenshots/ and reference them like:
-<p align="center">
-  <img src="docs/screenshots/menu.png" alt="The GitHub Spyglass menu" width="420">
-</p>
--->
+<strong>Menu bar</strong>
+<img src="docs/screenshots/github-spyglass-menubar.png" alt="The GitHub Spyglass menu bar" width="420">
+
+<strong>Notification example</strong>
+<img src="docs/screenshots/github-spyglass-notification.png" alt="The GitHub Spyglass menu bar" width="420">
 
 ## Menu bar app
 
