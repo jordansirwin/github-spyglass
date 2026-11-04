@@ -1,6 +1,9 @@
 BINARY := github-spyglass
 APP_NAME := GitHub Spyglass
-APP := build/$(APP_NAME).app
+# Staged without the .app suffix so Launch Services never indexes the build
+# copy: a second registration of the bundle ID confuses Notification Center's
+# icon lookup. It becomes a real .app only when installed.
+APP := build/app-staging
 
 .PHONY: build test vet check install clean app install-app run-app
 
@@ -38,12 +41,12 @@ app:
 	sips -z 512 512 build/icon-1024.png --out $(ICONSET)/icon_512x512.png >/dev/null
 	cp build/icon-1024.png $(ICONSET)/icon_512x512@2x.png
 	iconutil -c icns $(ICONSET) -o "$(APP)/Contents/Resources/AppIcon.icns"
-	codesign --force -s - "$(APP)"
 
 install-app: app
 	mkdir -p "$(HOME)/Applications"
 	rm -rf "$(HOME)/Applications/$(APP_NAME).app"
-	cp -R "$(APP)" "$(HOME)/Applications/"
+	cp -R "$(APP)" "$(HOME)/Applications/$(APP_NAME).app"
+	codesign --force -s - "$(HOME)/Applications/$(APP_NAME).app"
 
 run-app: install-app
 	open "$(HOME)/Applications/$(APP_NAME).app"
