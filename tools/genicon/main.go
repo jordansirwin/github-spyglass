@@ -1,6 +1,7 @@
-// genicon renders the menu bar icon: an octocat-ish head in right-facing
-// profile, peering through a spyglass pointed out to the upper right.
-// Monochrome (black + alpha) so it works as a macOS template icon.
+// genicon renders the menu bar icon: a white octocat-ish head in
+// right-facing profile peering through a big fuchsia spyglass held to its
+// left eye (covering the right), pointed out to the upper right. The white
+// body gets a thin dark outline so it stays visible on light menu bars.
 //
 // Usage: go run ./tools/genicon [output.png]
 package main
@@ -15,42 +16,50 @@ import (
 
 const size = 88 // rendered size; macOS scales it down to menu bar height
 
-// head in right-facing profile
+// head in right-facing profile, fully on canvas
 var (
-	headCX, headCY, headR = 36.0, 48.0, 32.0
+	headCX, headCY, headR = 33.0, 48.0, 32.0
 )
 
 // ears (triangles): back ear and front ear of the profile view
 var (
-	earBack  = [3][2]float64{{12, 26}, {18, 1}, {34, 22}}
-	earFront = [3][2]float64{{38, 24}, {48, 0}, {56, 26}}
+	earBack  = [3][2]float64{{9, 26}, {15, 1}, {31, 22}}
+	earFront = [3][2]float64{{35, 24}, {45, 0}, {53, 26}}
 )
 
-// eye (cut out of the head, just behind the eyepiece)
+// spyglass: a telescope starting well back on the face at the left eye,
+// covering the right eye on its way out, pointing up-and-out to the right
 var (
-	eyeX, eyeY = 44.0, 40.0
-	eyeR       = 5.0
-)
-
-// spyglass: a telescope growing out of the face at eye level, pointing
-// up-and-out to the right, with the classic stepped draw-tube profile
-var (
-	tubeAX, tubeAY = 52.0, 36.0 // eyepiece end, inside the head silhouette
-	tubeBX, tubeBY = 87.0, 20.0 // objective end
+	tubeAX, tubeAY = 36.0, 40.0 // eyepiece end, at the left eye
+	tubeBX, tubeBY = 84.0, 18.0 // objective end
 )
 
 // tubeSteps are the telescoping segments: up to each t, the half-width.
-// The head edge sits near t≈0.32, so the narrow eyepiece pokes out of the
-// face before the first step up.
 var tubeSteps = []struct{ t, w float64 }{
-	{0.42, 4.4},
-	{0.68, 7.2},
-	{0.94, 9.8},
-	{1.0, 11.6}, // objective rim
+	{0.14, 4.6}, // eyepiece, visible against the white face
+	{0.4, 7.8},
+	{0.68, 10.8},
+	{0.94, 13.2},
+	{1.0, 15.0}, // objective rim
 }
+
+const outlineW = 2.0 // dark outline around the white body
+
+var (
+	bodyColor    = [3]float64{255, 255, 255} // white octocat
+	outlineColor = [3]float64{70, 70, 78}    // dark gray outline
+	glassColor   = [3]float64{255, 20, 147}  // fuchsia pink spyglass
+)
 
 func inCircle(x, y, cx, cy, r float64) bool {
 	return math.Hypot(x-cx, y-cy) <= r
+}
+
+func segDist(px, py, ax, ay, bx, by float64) float64 {
+	abx, aby := bx-ax, by-ay
+	t := ((px-ax)*abx + (py-ay)*aby) / (abx*abx + aby*aby)
+	t = math.Max(0, math.Min(1, t))
+	return math.Hypot(px-(ax+t*abx), py-(ay+t*aby))
 }
 
 func inTriangle(x, y float64, t [3][2]float64) bool {
@@ -63,6 +72,21 @@ func inTriangle(x, y float64, t [3][2]float64) bool {
 	hasNeg := d1 < 0 || d2 < 0 || d3 < 0
 	hasPos := d1 > 0 || d2 > 0 || d3 > 0
 	return !(hasNeg && hasPos)
+}
+
+// nearTriangle reports whether the point is inside the triangle or within d
+// of one of its edges.
+func nearTriangle(x, y float64, t [3][2]float64, d float64) bool {
+	if inTriangle(x, y, t) {
+		return true
+	}
+	for i := range t {
+		j := (i + 1) % 3
+		if segDist(x, y, t[i][0], t[i][1], t[j][0], t[j][1]) <= d {
+			return true
+		}
+	}
+	return false
 }
 
 // tubeAt returns the distance from a point to the tube axis and the
@@ -88,22 +112,28 @@ func tubeWidth(t float64) float64 {
 	return -1
 }
 
-// opaque decides whether a subpixel sample is part of the icon.
-func opaque(x, y float64) bool {
+const (
+	clear = iota
+	outline
+	body
+	glass
+)
+
+// classify decides what a subpixel sample is part of.
+func classify(x, y float64) int {
 	tubeD, tubeT := tubeAt(x, y)
 	if w := tubeWidth(tubeT); w >= 0 && tubeD <= w {
-		return true
+		return glass
 	}
-
-	if !inCircle(x, y, headCX, headCY, headR) &&
-		!inTriangle(x, y, earBack) && !inTriangle(x, y, earFront) {
-		return false
+	if inCircle(x, y, headCX, headCY, headR) ||
+		inTriangle(x, y, earBack) || inTriangle(x, y, earFront) {
+		return body
 	}
-	// eye cutout
-	if inCircle(x, y, eyeX, eyeY, eyeR) {
-		return false
+	if inCircle(x, y, headCX, headCY, headR+outlineW) ||
+		nearTriangle(x, y, earBack, outlineW) || nearTriangle(x, y, earFront, outlineW) {
+		return outline
 	}
-	return true
+	return clear
 }
 
 func main() {
@@ -116,21 +146,36 @@ func main() {
 	const ss = 4 // supersampling per axis
 	for y := 0; y < size; y++ {
 		for x := 0; x < size; x++ {
-			hits := 0
+			var r, g, b, a float64
 			for sy := 0; sy < ss; sy++ {
 				for sx := 0; sx < ss; sx++ {
 					fx := float64(x) + (float64(sx)+0.5)/ss
 					fy := float64(y) + (float64(sy)+0.5)/ss
-					if opaque(fx, fy) {
-						hits++
+					var c [3]float64
+					switch classify(fx, fy) {
+					case glass:
+						c = glassColor
+					case body:
+						c = bodyColor
+					case outline:
+						c = outlineColor
+					default:
+						continue
 					}
+					r += c[0]
+					g += c[1]
+					b += c[2]
+					a += 255
 				}
 			}
-			if hits == 0 {
+			if a == 0 {
 				continue
 			}
-			a := uint8(255 * hits / (ss * ss))
-			img.SetRGBA(x, y, color.RGBA{0, 0, 0, a})
+			n := float64(ss * ss)
+			// premultiplied alpha
+			img.SetRGBA(x, y, color.RGBA{
+				uint8(r / n), uint8(g / n), uint8(b / n), uint8(a / n),
+			})
 		}
 	}
 

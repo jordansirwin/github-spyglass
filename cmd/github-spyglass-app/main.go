@@ -109,7 +109,7 @@ func setupLogging() {
 }
 
 func (a *app) onReady() {
-	systray.SetTemplateIcon(iconPNG, iconPNG)
+	systray.SetIcon(iconPNG)
 	systray.SetTooltip("GitHub Spyglass")
 
 	a.status = systray.AddMenuItem("Starting…", "")
