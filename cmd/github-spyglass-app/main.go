@@ -41,6 +41,11 @@ type event struct {
 type app struct {
 	cfgPath   string
 	statePath string
+	logPath   string
+
+	// notifier delivers directly, bypassing the recent-updates recording
+	// (used by the debug test notification).
+	notifier watcher.Notifier
 
 	mu     sync.Mutex
 	cfg    *config.Config
@@ -77,7 +82,7 @@ var intervalPresets = []time.Duration{
 }
 
 func main() {
-	setupLogging()
+	logPath := setupLogging()
 
 	// Fire one notification and exit: for testing delivery, permission, and
 	// icon without waiting for a real issue update. Run the binary inside
@@ -107,6 +112,8 @@ func main() {
 	a := &app{
 		cfgPath:   cfgPath,
 		statePath: statePath,
+		logPath:   logPath,
+		notifier:  notify.New(),
 		cfg:       cfg,
 		st:        st,
 		seed:      firstRun,
@@ -115,26 +122,30 @@ func main() {
 	}
 	a.watch = &watcher.Watcher{
 		Client:   github.New(github.ResolveToken(cfg.Token)),
-		Notifier: &recordingNotifier{app: a, inner: notify.New()},
+		Notifier: &recordingNotifier{app: a, inner: a.notifier},
 	}
 
 	systray.Run(a.onReady, a.onExit)
 }
 
-func setupLogging() {
+// setupLogging mirrors logs to ~/.github-spyglass/app.log and returns that
+// path, or "" when the log file couldn't be set up.
+func setupLogging() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return
+		return ""
 	}
 	dir := filepath.Join(home, ".github-spyglass")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
+		return ""
 	}
-	f, err := os.OpenFile(filepath.Join(dir, "app.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	path := filepath.Join(dir, "app.log")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return
+		return ""
 	}
 	log.SetOutput(io.MultiWriter(os.Stderr, f))
+	return path
 }
 
 func (a *app) onReady() {
@@ -190,6 +201,17 @@ func (a *app) onReady() {
 	if bundlePath() == "" {
 		login.Disable() // not running from a .app bundle
 	}
+
+	debug := systray.AddMenuItem("Debug", "")
+	testNotif := debug.AddSubMenuItem("Send Test Notification", "")
+	openLog := debug.AddSubMenuItem("Open Log", "")
+	if a.logPath == "" {
+		openLog.Disable()
+	}
+	openConfig := debug.AddSubMenuItem("Open Config File", "")
+	openState := debug.AddSubMenuItem("Open State File", "")
+	openFolder := debug.AddSubMenuItem("Open Data Folder", "")
+	notifSettings := debug.AddSubMenuItem("Notification Settings…", "")
 	systray.AddSeparator()
 
 	quit := systray.AddMenuItem("Quit GitHub Spyglass", "")
@@ -205,6 +227,18 @@ func (a *app) onReady() {
 				a.editFilter()
 			case <-login.ClickedCh:
 				a.toggleLogin(login)
+			case <-testNotif.ClickedCh:
+				a.sendTestNotification()
+			case <-openLog.ClickedCh:
+				openPath(a.logPath)
+			case <-openConfig.ClickedCh:
+				openTextFile(a.cfgPath)
+			case <-openState.ClickedCh:
+				openTextFile(a.statePath)
+			case <-openFolder.ClickedCh:
+				openPath(filepath.Dir(a.cfgPath))
+			case <-notifSettings.ClickedCh:
+				openPath("x-apple.systempreferences:com.apple.Notifications-Settings.extension")
 			case <-quit.ClickedCh:
 				systray.Quit()
 				return
@@ -376,6 +410,38 @@ func (a *app) toggleLogin(item *systray.MenuItem) {
 			return
 		}
 		item.Check()
+	}
+}
+
+// sendTestNotification fires one notification directly (not recorded in the
+// recent-updates list): for checking delivery, permission, and the icon.
+func (a *app) sendTestNotification() {
+	log.Printf("sending test notification")
+	if err := a.notifier.Notify("GitHub Spyglass", "Test",
+		"Notification test — click to open GitHub", "https://github.com"); err != nil {
+		log.Printf("test notification: %v", err)
+	}
+}
+
+// openPath opens a file, folder, or URL with its default handler.
+func openPath(path string) {
+	if path == "" {
+		return
+	}
+	if err := exec.Command("open", path).Run(); err != nil {
+		log.Printf("opening %s: %v", path, err)
+	}
+}
+
+// openTextFile opens a file in the default text editor, which beats the
+// default handler for extensionless or .json files.
+func openTextFile(path string) {
+	if _, err := os.Stat(path); err != nil {
+		log.Printf("opening %s: %v", path, err)
+		return
+	}
+	if err := exec.Command("open", "-t", path).Run(); err != nil {
+		log.Printf("opening %s: %v", path, err)
 	}
 }
 

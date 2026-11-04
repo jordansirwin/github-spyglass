@@ -27,6 +27,8 @@ A magnifying-glass icon appears in the menu bar. The dropdown shows:
   default 10)
 - **Start at Login** — registers a login item (macOS will ask to allow
   controlling System Events the first time)
+- **Debug** — send a test notification, open the log/config/state files or
+  the data folder, jump to macOS notification settings
 
 On first launch it prompts for a filter. Settings live in
 `~/.github-spyglass/config.json` (query, interval, recent count, optional
