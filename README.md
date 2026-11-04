@@ -18,17 +18,20 @@ make run-app      # build GitHub Spyglass.app, install to ~/Applications, launch
 A magnifying-glass icon appears in the menu bar. The dropdown shows:
 
 - the filter being watched and the last check time
-- the **10 most recent updates** — click one to open the issue in your browser
+- the **most recent updates** — click one to open the issue in your browser
 - **Check Now** / **Pause**
 - **Edit Filter…** — change the search filter (takes effect immediately; the new
   filter's existing issues are seeded silently)
 - **Poll Interval** — pick how often to check (1m–1h, default 5m)
+- **Recent Updates** — how many updates the dropdown shows (5/10/25/50,
+  default 10)
 - **Start at Login** — registers a login item (macOS will ask to allow
   controlling System Events the first time)
 
 On first launch it prompts for a filter. Settings live in
-`~/.github-spyglass/config.json` (query, interval, optional token), logs in
-`~/.github-spyglass/app.log`. The app has no Dock icon; quit it from the menu.
+`~/.github-spyglass/config.json` (query, interval, recent count, optional
+token), logs in `~/.github-spyglass/app.log`. The app has no Dock icon; quit
+it from the menu.
 
 Don't run the app and the CLI against the same state file at the same time —
 they'd race and double-notify.
@@ -62,13 +65,20 @@ Flags:
 
 ## Notifications
 
-Uses **[terminal-notifier](https://github.com/julienXX/terminal-notifier)** (`brew install terminal-notifier`): clicking a notification opens the issue in your browser. If it isn't installed, falls back to `osascript` (ships with macOS, no click action).
+The **menu bar app** posts notifications natively through Notification Center
+as GitHub Spyglass — clicking one opens the issue in your browser. Allow
+notifications when macOS asks on first launch.
 
-To make notifications **stick on screen until you clear them**, set the style to Alerts once:
+The **CLI** runs outside an app bundle, so it uses
+**[terminal-notifier](https://github.com/julienXX/terminal-notifier)**
+(`brew install terminal-notifier`) instead, which also supports click-to-open.
+If it isn't installed, the CLI falls back to `osascript` (ships with macOS, no
+click action).
 
-System Settings → Notifications → terminal-notifier → Alert style: **Alerts**
-
-The first notification triggers a macOS prompt to allow notifications from terminal-notifier — click Allow (the terminal-notifier entry only appears in System Settings after that first notification).
+To make notifications **stick on screen until you clear them**, set the alert
+style to **Alerts** once in System Settings → Notifications (under GitHub
+Spyglass for the app, or terminal-notifier for the CLI — the entry appears
+after the first notification).
 
 ## Authentication
 

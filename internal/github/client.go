@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -21,14 +22,16 @@ const apiBase = "https://api.github.com"
 const maxSearchPages = 3
 
 type Client struct {
-	http  *http.Client
-	token string
+	http    *http.Client
+	token   string
+	baseURL string // apiBase, overridden in tests
 }
 
 func New(token string) *Client {
 	return &Client{
-		http:  &http.Client{Timeout: 30 * time.Second},
-		token: token,
+		http:    &http.Client{Timeout: 30 * time.Second},
+		token:   token,
+		baseURL: apiBase,
 	}
 }
 
@@ -147,7 +150,7 @@ func (c *Client) SearchIssues(ctx context.Context, query string) ([]Issue, error
 			TotalCount int     `json:"total_count"`
 			Items      []Issue `json:"items"`
 		}
-		if err := c.get(ctx, apiBase+"/search/issues?"+q.Encode(), &result); err != nil {
+		if err := c.get(ctx, c.baseURL+"/search/issues?"+q.Encode(), &result); err != nil {
 			return nil, fmt.Errorf("searching issues: %w", err)
 		}
 		all = append(all, result.Items...)
@@ -161,7 +164,7 @@ func (c *Client) SearchIssues(ctx context.Context, query string) ([]Issue, error
 // CommentsSince returns comments on the issue created at or after since.
 func (c *Client) CommentsSince(ctx context.Context, issue Issue, since time.Time) ([]Comment, error) {
 	u := fmt.Sprintf("%s/repos/%s/issues/%d/comments?per_page=100&since=%s",
-		apiBase, issue.Repo(), issue.Number, url.QueryEscape(since.UTC().Format(time.RFC3339)))
+		c.baseURL, issue.Repo(), issue.Number, url.QueryEscape(since.UTC().Format(time.RFC3339)))
 	var comments []Comment
 	if err := c.get(ctx, u, &comments); err != nil {
 		return nil, err
@@ -205,7 +208,11 @@ func (c *Client) get(ctx context.Context, rawURL string, out any) error {
 			msg = msg[:300]
 		}
 		if resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0" {
-			return fmt.Errorf("GitHub rate limit exceeded (resets at %s)", resp.Header.Get("X-RateLimit-Reset"))
+			if sec, perr := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64); perr == nil {
+				return fmt.Errorf("GitHub rate limit exceeded (resets at %s)",
+					time.Unix(sec, 0).Local().Format("15:04:05"))
+			}
+			return fmt.Errorf("GitHub rate limit exceeded")
 		}
 		return fmt.Errorf("GitHub API %s: %s: %s", resp.Status, rawURL, msg)
 	}

@@ -299,6 +299,42 @@ func TestRenameAndBodyEditNotifies(t *testing.T) {
 	}
 }
 
+func TestMilestoneChangeNotifies(t *testing.T) {
+	before := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	gh := &fakeGitHub{issues: []github.Issue{testIssue(1, before, 0, "open")}}
+	n := &fakeNotifier{}
+	st := state.New()
+	w := newWatcher(gh, n)
+	ctx := context.Background()
+
+	if err := w.Poll(ctx, st, true); err != nil {
+		t.Fatal(err)
+	}
+
+	set := testIssue(1, before.Add(time.Minute), 0, "open")
+	set.Milestone = &github.Milestone{Title: "v2.0"}
+	gh.issues = []github.Issue{set}
+	if err := w.Poll(ctx, st, false); err != nil {
+		t.Fatal(err)
+	}
+
+	removed := testIssue(1, before.Add(2*time.Minute), 0, "open")
+	gh.issues = []github.Issue{removed}
+	if err := w.Poll(ctx, st, false); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(n.sent) != 2 {
+		t.Fatalf("got %d notifications, want 2: %+v", len(n.sent), n.sent)
+	}
+	if want := "milestone set to v2.0"; n.sent[0].message != want {
+		t.Errorf("message = %q, want %q", n.sent[0].message, want)
+	}
+	if want := "milestone removed"; n.sent[1].message != want {
+		t.Errorf("message = %q, want %q", n.sent[1].message, want)
+	}
+}
+
 func TestLegacyStateEntrySkipsSnapshotDiff(t *testing.T) {
 	before := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	issue := testIssue(1, before.Add(time.Minute), 0, "open")

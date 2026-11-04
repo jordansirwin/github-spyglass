@@ -61,13 +61,17 @@ func main() {
 	}
 
 	log.Printf("watching filter %q every %s", *query, *interval)
-	if err := w.Poll(ctx, st, firstRun); err != nil {
-		log.Printf("poll failed: %v", err)
+	pollErr := w.Poll(ctx, st, firstRun)
+	if pollErr != nil {
+		log.Printf("poll failed: %v", pollErr)
 	}
 	if err := state.Save(*statePath, st); err != nil {
 		log.Fatalf("saving state: %v", err)
 	}
 	if *once {
+		if pollErr != nil {
+			os.Exit(1)
+		}
 		return
 	}
 

@@ -2,7 +2,7 @@ BINARY := github-spyglass
 APP_NAME := GitHub Spyglass
 APP := build/$(APP_NAME).app
 
-.PHONY: build test vet install clean app install-app run-app
+.PHONY: build test vet check install clean app install-app run-app
 
 build:
 	go build -o $(BINARY) ./cmd/github-spyglass
@@ -12,6 +12,8 @@ test:
 
 vet:
 	go vet ./...
+
+check: vet test
 
 install:
 	go install ./cmd/github-spyglass
