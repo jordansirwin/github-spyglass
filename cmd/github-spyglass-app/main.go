@@ -28,8 +28,9 @@ import (
 //go:embed icon.png
 var iconPNG []byte
 
-// maxRecent is how many updates the dropdown shows.
-const maxRecent = 10
+// recentPresets are the dropdown sizes offered in the menu; the default
+// (no config) is 10 via config.RecentCount.
+var recentPresets = []int{5, 10, 25, 50}
 
 type event struct {
 	when  time.Time
@@ -56,10 +57,12 @@ type app struct {
 	status         *systray.MenuItem
 	lastCheck      *systray.MenuItem
 	empty          *systray.MenuItem
-	slots          [maxRecent]*systray.MenuItem
+	slots          [config.MaxRecent]*systray.MenuItem
 	pause          *systray.MenuItem
 	intervalParent *systray.MenuItem
 	intervalItems  []*systray.MenuItem
+	recentParent   *systray.MenuItem
+	recentItems    []*systray.MenuItem
 }
 
 // intervalPresets are the poll intervals offered in the menu; the default
@@ -169,6 +172,18 @@ func (a *app) onReady() {
 				a.setInterval(d)
 			}
 		}(d, item)
+	}
+
+	curRecent := a.cfg.RecentCount()
+	a.recentParent = systray.AddMenuItem(fmt.Sprintf("Recent Updates: %d", curRecent), "")
+	for _, n := range recentPresets {
+		item := a.recentParent.AddSubMenuItemCheckbox(fmt.Sprintf("%d", n), "", n == curRecent)
+		a.recentItems = append(a.recentItems, item)
+		go func(n int, item *systray.MenuItem) {
+			for range item.ClickedCh {
+				a.setRecent(n)
+			}
+		}(n, item)
 	}
 
 	login := systray.AddMenuItem("Start at Login", "")
@@ -384,12 +399,26 @@ func (a *app) addEvent(title, message, url string) {
 	label := truncate(title+" · "+message, 90)
 	a.mu.Lock()
 	a.events = append([]event{{when: time.Now(), label: label, url: url}}, a.events...)
-	if len(a.events) > maxRecent {
-		a.events = a.events[:maxRecent]
+	if len(a.events) > config.MaxRecent {
+		a.events = a.events[:config.MaxRecent]
 	}
-	events := a.events
+	events := a.visibleEventsLocked()
 	a.mu.Unlock()
 
+	a.renderEvents(events)
+}
+
+// visibleEventsLocked returns the events the dropdown should show under the
+// configured limit. Callers must hold a.mu.
+func (a *app) visibleEventsLocked() []event {
+	if n := a.cfg.RecentCount(); len(a.events) > n {
+		return a.events[:n]
+	}
+	return a.events
+}
+
+// renderEvents fills the dropdown's event slots, hiding the unused ones.
+func (a *app) renderEvents(events []event) {
 	for i, slot := range a.slots {
 		if i < len(events) {
 			slot.SetTitle(events[i].when.Format("15:04") + "  " + events[i].label)
@@ -398,7 +427,34 @@ func (a *app) addEvent(title, message, url string) {
 			slot.Hide()
 		}
 	}
-	a.empty.Hide()
+	if len(events) == 0 {
+		a.empty.Show()
+	} else {
+		a.empty.Hide()
+	}
+}
+
+// setRecent switches how many recent updates the dropdown shows and
+// persists it.
+func (a *app) setRecent(n int) {
+	a.mu.Lock()
+	a.cfg.Recent = n
+	if err := a.cfg.Save(a.cfgPath); err != nil {
+		log.Printf("saving config: %v", err)
+	}
+	events := a.visibleEventsLocked()
+	a.mu.Unlock()
+
+	a.recentParent.SetTitle(fmt.Sprintf("Recent Updates: %d", n))
+	for i, item := range a.recentItems {
+		if recentPresets[i] == n {
+			item.Check()
+		} else {
+			item.Uncheck()
+		}
+	}
+	a.renderEvents(events)
+	log.Printf("recent updates set to %d", n)
 }
 
 // recordingNotifier feeds every notification into the dropdown's recent

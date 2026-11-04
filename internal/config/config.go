@@ -17,6 +17,9 @@ type Config struct {
 	Query string `json:"query"`
 	// Interval is a Go duration string such as "5m". Empty means 5m.
 	Interval string `json:"interval,omitempty"`
+	// Recent is how many recent updates the menu bar dropdown shows.
+	// Zero means the default of 10.
+	Recent int `json:"recent,omitempty"`
 	// Token optionally overrides GitHub token resolution.
 	Token string `json:"token,omitempty"`
 }
@@ -56,6 +59,21 @@ func (c *Config) Save(path string) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+// MaxRecent is the most recent updates the dropdown can be configured to
+// show.
+const MaxRecent = 50
+
+// RecentCount returns Recent, defaulting to 10 and clamping to [1, MaxRecent].
+func (c *Config) RecentCount() int {
+	if c.Recent <= 0 {
+		return 10
+	}
+	if c.Recent > MaxRecent {
+		return MaxRecent
+	}
+	return c.Recent
 }
 
 // PollInterval parses Interval, defaulting to 5 minutes and clamping to at
