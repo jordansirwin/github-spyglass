@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jirwin/github-spyglass/internal/config"
 	"github.com/jirwin/github-spyglass/internal/github"
 	"github.com/jirwin/github-spyglass/internal/notify"
 	"github.com/jirwin/github-spyglass/internal/state"
@@ -22,7 +23,7 @@ func main() {
 	query := flag.String("query", "", "GitHub search filter (required), e.g. 'repo:elastic/cloud is:issue is:open label:team'")
 	interval := flag.Duration("interval", 5*time.Minute, "poll interval")
 	statePath := flag.String("state", state.DefaultPath(), "path to the state file")
-	token := flag.String("token", "", "GitHub token (default: $GITHUB_TOKEN, $GH_TOKEN, or 'gh auth token')")
+	token := flag.String("token", "", "GitHub token (default: the menu bar app's saved token, $GITHUB_TOKEN, $GH_TOKEN, or 'gh auth token')")
 	once := flag.Bool("once", false, "run a single poll and exit")
 	verbose := flag.Bool("verbose", false, "verbose logging")
 	flag.Parse()
@@ -37,7 +38,11 @@ func main() {
 		os.Exit(2)
 	}
 
-	tok := github.ResolveToken(*token)
+	explicit := *token
+	if explicit == "" {
+		explicit = config.LoadToken(config.DefaultTokenPath()) // saved by the menu bar app
+	}
+	tok := github.ResolveToken(explicit)
 	if tok == "" {
 		log.Println("warning: no GitHub token found; running unauthenticated (10 searches/min limit, no private repos)")
 	}

@@ -76,7 +76,7 @@ Flags:
 | `-query` | (required) | GitHub search filter. Add `is:issue` to exclude PRs — the search API returns both. |
 | `-interval` | `5m` | Poll interval (minimum `1m`). |
 | `-state` | `~/.github-spyglass/state.json` | State file path. Use different files to run multiple filters at once. |
-| `-token` | auto | GitHub token. Defaults to `$GITHUB_TOKEN`, `$GH_TOKEN`, then `gh auth token`. |
+| `-token` | auto | GitHub token. Defaults to the token saved by the menu bar app, then `$GITHUB_TOKEN`, `$GH_TOKEN`, then `gh auth token`. |
 | `-once` | false | Single poll and exit (useful for cron/launchd). |
 | `-verbose` | false | Verbose logging. |
 
@@ -99,7 +99,14 @@ after the first notification).
 
 ## Authentication
 
-A token is strongly recommended: unauthenticated search is limited to 10 requests/minute and can't see private repos. If you use the `gh` CLI, no setup is needed — the token is pulled from `gh auth token`.
+A token is strongly recommended: unauthenticated search is limited to 10 requests/minute and can't see private repos. The token is taken from the first of these that is set:
+
+1. the `token` field in `~/.github-spyglass/config.json` (menu bar app) or the `-token` flag (CLI)
+2. the token saved by **Settings → Set GitHub Token…** in `~/.github-spyglass/token`
+3. `$GITHUB_TOKEN` or `$GH_TOKEN`
+4. `gh auth token`, if you use the `gh` CLI
+
+Apps launched from Finder or at login don't see your shell's environment variables, so for the menu bar app use **Set GitHub Token…** (a personal access token with the `repo` scope; authorize it for SSO orgs). A stale `gh` keychain login also breaks the app, since the shell's `GITHUB_TOKEN` isn't visible to it.
 
 ## Running in the background
 
