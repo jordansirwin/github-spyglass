@@ -3,7 +3,10 @@
 // left eye (covering the right), pointed out to the upper right. The white
 // body gets a thin dark outline so it stays visible on light menu bars.
 //
-// Usage: go run ./tools/genicon [output.png]
+// Usage: go run ./tools/genicon [output.png [pixels]]
+//
+// The optional pixels argument sets the output resolution (default 88);
+// the geometry below is always in 88-unit coordinate space.
 package main
 
 import (
@@ -12,6 +15,7 @@ import (
 	"image/png"
 	"math"
 	"os"
+	"strconv"
 )
 
 const size = 88 // rendered size; macOS scales it down to menu bar height
@@ -141,16 +145,25 @@ func main() {
 	if len(os.Args) > 1 {
 		out = os.Args[1]
 	}
+	px := size
+	if len(os.Args) > 2 {
+		v, err := strconv.Atoi(os.Args[2])
+		if err != nil || v < 8 {
+			panic("pixels must be an integer >= 8")
+		}
+		px = v
+	}
+	scale := float64(size) / float64(px)
 
-	img := image.NewRGBA(image.Rect(0, 0, size, size))
+	img := image.NewRGBA(image.Rect(0, 0, px, px))
 	const ss = 4 // supersampling per axis
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; x++ {
+	for y := 0; y < px; y++ {
+		for x := 0; x < px; x++ {
 			var r, g, b, a float64
 			for sy := 0; sy < ss; sy++ {
 				for sx := 0; sx < ss; sx++ {
-					fx := float64(x) + (float64(sx)+0.5)/ss
-					fy := float64(y) + (float64(sy)+0.5)/ss
+					fx := (float64(x) + (float64(sx)+0.5)/ss) * scale
+					fy := (float64(y) + (float64(sy)+0.5)/ss) * scale
 					var c [3]float64
 					switch classify(fx, fy) {
 					case glass:

@@ -76,6 +76,19 @@ var intervalPresets = []time.Duration{
 func main() {
 	setupLogging()
 
+	// Fire one notification and exit: for testing delivery, permission, and
+	// icon without waiting for a real issue update. Run the binary inside
+	// the installed bundle so it notifies as the app:
+	//   "~/Applications/GitHub Spyglass.app/Contents/MacOS/github-spyglass-app" -test-notification
+	if len(os.Args) > 1 && os.Args[1] == "-test-notification" {
+		n := notify.New()
+		if err := n.Notify("GitHub Spyglass", "Test", "Notification test — click to open GitHub", "https://github.com"); err != nil {
+			log.Fatalf("test notification: %v", err)
+		}
+		time.Sleep(2 * time.Second) // let the async delivery finish
+		return
+	}
+
 	cfgPath := config.DefaultPath()
 	cfg, err := config.Load(cfgPath)
 	if err != nil {

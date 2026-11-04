@@ -8,17 +8,26 @@ import (
 	"strings"
 )
 
-// Notifier sends macOS notifications via terminal-notifier (clicking a
-// notification opens the issue in the browser), falling back to osascript,
-// which ships with macOS but has no click action.
+// Notifier sends macOS notifications. When the process runs inside an app
+// bundle it posts them natively through UNUserNotificationCenter, so they
+// appear as this app and clicking one opens the issue in the browser.
+// Outside a bundle (the CLI) it shells out to terminal-notifier (clicking
+// opens the issue) or, failing that, osascript, which ships with macOS but
+// has no click action.
 //
-// For notifications that stay on screen until cleared, set terminal-notifier's
-// style to "Alerts" in System Settings > Notifications > terminal-notifier.
+// For notifications that stay on screen until cleared, set the app's style
+// to "Alerts" in System Settings > Notifications.
 type Notifier struct {
+	native           bool
 	terminalNotifier string
 }
 
 func New() *Notifier {
+	if nativeAvailable() {
+		nativeInit()
+		log.Printf("using native Notification Center notifications")
+		return &Notifier{native: true}
+	}
 	tn, _ := exec.LookPath("terminal-notifier")
 	if tn != "" {
 		log.Printf("using terminal-notifier (%s)", tn)
@@ -29,6 +38,11 @@ func New() *Notifier {
 }
 
 func (n *Notifier) Notify(title, subtitle, message, url string) error {
+	if n.native {
+		nativeNotify(title, subtitle, message, url)
+		return nil
+	}
+
 	if n.terminalNotifier != "" {
 		args := []string{"-title", title, "-message", message, "-sound", "default"}
 		if subtitle != "" {
