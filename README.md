@@ -9,7 +9,30 @@ You get notified when a matched issue:
 - is otherwise **edited** (title, body, labels, assignees, ...)
 - **newly matches** the filter
 
-## Build
+## Menu bar app
+
+```bash
+make run-app      # build GitHub Spyglass.app, install to ~/Applications, launch
+```
+
+A magnifying-glass icon appears in the menu bar. The dropdown shows:
+
+- the filter being watched and the last check time
+- the **10 most recent updates** — click one to open the issue in your browser
+- **Check Now** / **Pause**
+- **Edit Filter…** — change the search filter (takes effect immediately; the new
+  filter's existing issues are seeded silently)
+- **Start at Login** — registers a login item (macOS will ask to allow
+  controlling System Events the first time)
+
+On first launch it prompts for a filter. Settings live in
+`~/.github-spyglass/config.json` (query, interval, optional token), logs in
+`~/.github-spyglass/app.log`. The app has no Dock icon; quit it from the menu.
+
+Don't run the app and the CLI against the same state file at the same time —
+they'd race and double-notify.
+
+## CLI
 
 ```bash
 make build        # builds ./github-spyglass

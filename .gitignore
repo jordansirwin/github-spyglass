@@ -48,3 +48,6 @@ docker/secrets
 
 # project binary
 /github-spyglass
+
+# app bundle build output
+/build/

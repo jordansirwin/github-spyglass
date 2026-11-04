@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 )
@@ -28,6 +30,26 @@ func New(token string) *Client {
 		http:  &http.Client{Timeout: 30 * time.Second},
 		token: token,
 	}
+}
+
+// ResolveToken returns the first available GitHub token: the explicit one,
+// $GITHUB_TOKEN, $GH_TOKEN, or the gh CLI's stored token. Empty when none.
+func ResolveToken(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	for _, env := range []string{"GITHUB_TOKEN", "GH_TOKEN"} {
+		if v := os.Getenv(env); v != "" {
+			return v
+		}
+	}
+	if gh, err := exec.LookPath("gh"); err == nil {
+		out, err := exec.Command(gh, "auth", "token").Output()
+		if err == nil {
+			return strings.TrimSpace(string(out))
+		}
+	}
+	return ""
 }
 
 // User is the author of an issue or comment.

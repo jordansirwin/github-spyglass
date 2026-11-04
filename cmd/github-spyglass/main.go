@@ -8,9 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -39,7 +37,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	tok := resolveToken(*token)
+	tok := github.ResolveToken(*token)
 	if tok == "" {
 		log.Println("warning: no GitHub token found; running unauthenticated (10 searches/min limit, no private repos)")
 	}
@@ -90,22 +88,4 @@ func main() {
 			}
 		}
 	}
-}
-
-func resolveToken(flagToken string) string {
-	if flagToken != "" {
-		return flagToken
-	}
-	for _, env := range []string{"GITHUB_TOKEN", "GH_TOKEN"} {
-		if v := os.Getenv(env); v != "" {
-			return v
-		}
-	}
-	if gh, err := exec.LookPath("gh"); err == nil {
-		out, err := exec.Command(gh, "auth", "token").Output()
-		if err == nil {
-			return strings.TrimSpace(string(out))
-		}
-	}
-	return ""
 }
