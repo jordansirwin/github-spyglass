@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -46,10 +47,28 @@ func ResolveToken(explicit string) string {
 			return v
 		}
 	}
-	if gh, err := exec.LookPath("gh"); err == nil {
+	if gh := findGH(); gh != "" {
 		out, err := exec.Command(gh, "auth", "token").Output()
 		if err == nil {
 			return strings.TrimSpace(string(out))
+		}
+		log.Printf("gh auth token failed: %v", err)
+	} else {
+		log.Printf("gh CLI not found")
+	}
+	return ""
+}
+
+// findGH locates the gh CLI. Apps launched from Finder or at login get a
+// minimal PATH without Homebrew, so well-known install locations are tried
+// after PATH.
+func findGH() string {
+	if gh, err := exec.LookPath("gh"); err == nil {
+		return gh
+	}
+	for _, p := range []string{"/opt/homebrew/bin/gh", "/usr/local/bin/gh"} {
+		if _, err := os.Stat(p); err == nil {
+			return p
 		}
 	}
 	return ""
