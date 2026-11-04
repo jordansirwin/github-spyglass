@@ -197,9 +197,17 @@ func (a *app) onReady() {
 		}(n, item)
 	}
 
-	login := systray.AddMenuItem("Start at Login", "")
-	if bundlePath() == "" {
+	login := systray.AddMenuItemCheckbox("Start at Login", "", false)
+	if bundle := bundlePath(); bundle == "" {
 		login.Disable() // not running from a .app bundle
+	} else {
+		// Reflect the persisted login-item state. Asynchronous because
+		// osascript can be slow (or prompt for Automation permission).
+		go func() {
+			if loginItemEnabled(bundle) {
+				login.Check()
+			}
+		}()
 	}
 
 	debug := systray.AddMenuItem("Debug", "")
@@ -387,6 +395,23 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dh", d/time.Hour)
 	}
 	return fmt.Sprintf("%dm", d/time.Minute)
+}
+
+// loginItemEnabled reports whether a login item exists for the bundle.
+func loginItemEnabled(bundle string) bool {
+	out, err := exec.Command("osascript", "-e",
+		`tell application "System Events" to get the path of every login item`).Output()
+	if err != nil {
+		log.Printf("reading login items: %v", err)
+		return false
+	}
+	want := strings.TrimSuffix(bundle, "/")
+	for _, p := range strings.Split(string(out), ", ") {
+		if strings.TrimSuffix(strings.TrimSpace(p), "/") == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *app) toggleLogin(item *systray.MenuItem) {
