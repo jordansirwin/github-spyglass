@@ -54,6 +54,8 @@ type app struct {
 	paused bool
 	seed   bool // next poll seeds state without notifying
 
+	lastPollErr string // last poll error notified, to avoid repeating it every poll
+
 	watch    *watcher.Watcher
 	ticker   *time.Ticker
 	checkNow chan struct{}
@@ -301,15 +303,46 @@ func (a *app) poll(ctx context.Context) {
 	cctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	if err := a.watch.Poll(cctx, st, seed); err != nil {
-		log.Printf("poll failed: %v", err)
+		a.reportPollError(err)
 		a.status.SetTitle("⚠ " + truncate(err.Error(), 70))
 		return
 	}
+	a.clearPollError()
 	a.status.SetTitle("Watching: " + truncate(a.watch.Query, 50))
 	a.lastCheck.SetTitle("Last check: " + time.Now().Format("15:04:05"))
 	if err := state.Save(a.statePath, st); err != nil {
-		log.Printf("saving state: %v", err)
+		a.reportError("saving state", err)
 	}
+}
+
+// reportError logs an error and shows it as a notification.
+func (a *app) reportError(what string, err error) {
+	log.Printf("%s: %v", what, err)
+	msg := truncate(err.Error(), 200)
+	if nerr := a.notifier.Notify("GitHub Spyglass", "Error: "+what, msg, ""); nerr != nil {
+		log.Printf("error notification: %v", nerr)
+	}
+}
+
+// reportPollError notifies about a failed poll, but only when the error
+// differs from the last one notified, so a persistent failure doesn't alert
+// on every poll.
+func (a *app) reportPollError(err error) {
+	a.mu.Lock()
+	repeat := a.lastPollErr == err.Error()
+	a.lastPollErr = err.Error()
+	a.mu.Unlock()
+	if repeat {
+		log.Printf("poll failed: %v", err)
+		return
+	}
+	a.reportError("poll failed", err)
+}
+
+func (a *app) clearPollError() {
+	a.mu.Lock()
+	a.lastPollErr = ""
+	a.mu.Unlock()
 }
 
 func (a *app) triggerCheck() {
@@ -355,7 +388,7 @@ func (a *app) editFilter() {
 	a.cfg.Query = query
 	a.seed = true // don't notify for everything the new filter matches
 	if err := a.cfg.Save(a.cfgPath); err != nil {
-		log.Printf("saving config: %v", err)
+		a.reportError("saving config", err)
 	}
 	if a.ticker != nil {
 		a.ticker.Reset(a.cfg.PollInterval())
@@ -372,7 +405,7 @@ func (a *app) setInterval(d time.Duration) {
 	a.mu.Lock()
 	a.cfg.Interval = formatDuration(d)
 	if err := a.cfg.Save(a.cfgPath); err != nil {
-		log.Printf("saving config: %v", err)
+		a.reportError("saving config", err)
 	}
 	if a.ticker != nil {
 		a.ticker.Reset(d)
@@ -422,7 +455,7 @@ func (a *app) toggleLogin(item *systray.MenuItem) {
 	if item.Checked() {
 		script := `tell application "System Events" to delete login item "GitHub Spyglass"`
 		if err := exec.Command("osascript", "-e", script).Run(); err != nil {
-			log.Printf("removing login item: %v", err)
+			a.reportError("removing login item", err)
 			return
 		}
 		item.Uncheck()
@@ -431,7 +464,7 @@ func (a *app) toggleLogin(item *systray.MenuItem) {
 			`tell application "System Events" to make login item at end with properties {path:%s, hidden:false}`,
 			appleScriptString(bundle))
 		if err := exec.Command("osascript", "-e", script).Run(); err != nil {
-			log.Printf("adding login item: %v", err)
+			a.reportError("adding login item", err)
 			return
 		}
 		item.Check()
@@ -531,7 +564,7 @@ func (a *app) setRecent(n int) {
 	a.mu.Lock()
 	a.cfg.Recent = n
 	if err := a.cfg.Save(a.cfgPath); err != nil {
-		log.Printf("saving config: %v", err)
+		a.reportError("saving config", err)
 	}
 	events := a.visibleEventsLocked()
 	a.mu.Unlock()
