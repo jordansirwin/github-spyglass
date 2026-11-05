@@ -64,7 +64,7 @@ make install      # go install into $GOBIN
 ## Usage
 
 ```bash
-./github-spyglass -query 'repo:elastic/cloud is:issue is:open label:my-team' -interval 5m
+./github-spyglass -query 'repo:jordansirwin/github-spyglass is:issue is:open label:spyglass' -interval 5m
 ```
 
 The first run seeds state silently; notifications start on the next poll. State lives in `~/.github-spyglass/state.json`.
@@ -128,7 +128,7 @@ For something that survives reboots, create a LaunchAgent at `~/Library/LaunchAg
   <array>
     <string>/path/to/github-spyglass</string>
     <string>-query</string>
-    <string>repo:elastic/cloud is:issue is:open label:my-team</string>
+    <string>repo:jordansirwin/github-spyglass is:issue is:open label:spyglass</string>
     <string>-interval</string>
     <string>5m</string>
   </array>
