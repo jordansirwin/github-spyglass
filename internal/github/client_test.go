@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -19,6 +20,7 @@ func testClient(t *testing.T, handler http.Handler) *Client {
 	t.Cleanup(srv.Close)
 	c := New("test-token")
 	c.baseURL = srv.URL
+	c.retryDelay = time.Millisecond
 	return c
 }
 
@@ -258,5 +260,74 @@ func TestCheckAuth(t *testing.T) {
 	c.SetToken("bad")
 	if err := c.CheckAuth(context.Background()); !errors.Is(err, ErrUnauthorized) {
 		t.Errorf("bad token: err = %v, want ErrUnauthorized", err)
+	}
+}
+
+func TestRetriesTransientFailures(t *testing.T) {
+	var calls atomic.Int32
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		fmt.Fprint(w, `{"items": []}`)
+	}))
+	if _, err := c.SearchIssues(context.Background(), "q"); err != nil {
+		t.Fatalf("want success after retries: %v", err)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Errorf("calls = %d, want 3", got)
+	}
+}
+
+func TestGivesUpAfterRepeatedTransientFailures(t *testing.T) {
+	var calls atomic.Int32
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	_, err := c.SearchIssues(context.Background(), "q")
+	if !errors.Is(err, ErrTransient) {
+		t.Errorf("err = %v, want ErrTransient", err)
+	}
+	if got := calls.Load(); got != requestAttempts {
+		t.Errorf("calls = %d, want %d", got, requestAttempts)
+	}
+}
+
+func TestDoesNotRetryPermanentErrors(t *testing.T) {
+	var calls atomic.Int32
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusUnprocessableEntity)
+	}))
+	_, err := c.SearchIssues(context.Background(), "q")
+	if err == nil || errors.Is(err, ErrTransient) {
+		t.Errorf("err = %v, want a non-transient error", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("calls = %d, want 1 (no retry)", got)
+	}
+}
+
+func TestNetworkErrorIsTransient(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	c := New("tok")
+	c.baseURL = srv.URL
+	c.retryDelay = time.Millisecond
+	srv.Close() // connection refused from here on
+	if _, err := c.SearchIssues(context.Background(), "q"); !errors.Is(err, ErrTransient) {
+		t.Errorf("err = %v, want ErrTransient", err)
+	}
+}
+
+func TestCancelledContextIsNotTransient(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{}`)
+	}))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := c.SearchIssues(ctx, "q"); errors.Is(err, ErrTransient) {
+		t.Errorf("cancelled context should not be transient: %v", err)
 	}
 }

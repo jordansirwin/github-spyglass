@@ -56,8 +56,10 @@ type app struct {
 	paused bool
 	seed   bool // next poll seeds state without notifying
 
-	authFailing bool   // last poll failed with an auth error
-	lastPollErr string // last poll error notified, to avoid repeating it every poll
+	authFailing bool // last poll failed with an auth error
+	// transientFails counts consecutive polls that failed on a network problem.
+	transientFails int
+	lastPollErr    string // last poll error notified, to avoid repeating it every poll
 
 	watch    *watcher.Watcher
 	gh       *github.Client
@@ -75,6 +77,10 @@ type app struct {
 	recentParent   *systray.MenuItem
 	recentItems    []*systray.MenuItem
 }
+
+// transientFailsBeforeNotify is how many consecutive network-failure polls
+// it takes before the user is notified.
+const transientFailsBeforeNotify = 3
 
 // intervalPresets are the poll intervals offered in the menu; the default
 // (no config) is 5m via config.PollInterval.
@@ -319,7 +325,7 @@ func (a *app) poll(ctx context.Context) {
 		a.gh.SetToken(a.resolveToken())
 	}
 
-	cctx, cancel := context.WithTimeout(ctx, time.Minute)
+	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	if err := a.watch.Poll(cctx, st, seed); err != nil {
 		a.mu.Lock()
@@ -330,12 +336,30 @@ func (a *app) poll(ctx context.Context) {
 			a.status.SetTitle("⚠ GitHub sign-in required")
 			return
 		}
+		if errors.Is(err, github.ErrTransient) {
+			// Network blips (wake from sleep, VPN switch) usually clear by
+			// the next poll: only notify once several polls in a row fail.
+			a.mu.Lock()
+			a.transientFails++
+			quiet := a.transientFails < transientFailsBeforeNotify
+			a.mu.Unlock()
+			if quiet {
+				log.Printf("poll failed (will retry): %v", err)
+				a.status.SetTitle("⚠ Network problem, retrying")
+				return
+			}
+		} else {
+			a.mu.Lock()
+			a.transientFails = 0
+			a.mu.Unlock()
+		}
 		a.reportPollError(err)
 		a.status.SetTitle("⚠ " + truncate(err.Error(), 70))
 		return
 	}
 	a.mu.Lock()
 	a.authFailing = false
+	a.transientFails = 0
 	a.mu.Unlock()
 	a.clearPollError()
 	a.status.SetTitle("Watching: " + truncate(a.watch.Query, 50))

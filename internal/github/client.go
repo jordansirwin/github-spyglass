@@ -28,18 +28,29 @@ const maxSearchPages = 3
 // or none were available.
 var ErrUnauthorized = errors.New("GitHub token is invalid or missing")
 
+// ErrTransient marks failures likely to clear on their own: network errors,
+// timeouts and 502/503/504 responses.
+var ErrTransient = errors.New("temporary network problem")
+
+// requestAttempts is how many times a request is tried before giving up on a
+// transient failure.
+const requestAttempts = 3
+
 type Client struct {
 	http    *http.Client
 	mu      sync.RWMutex
 	token   string
 	baseURL string // apiBase, overridden in tests
+	// retryDelay is the pause before the first retry, doubling after that.
+	retryDelay time.Duration
 }
 
 func New(token string) *Client {
 	return &Client{
-		http:    &http.Client{Timeout: 30 * time.Second},
-		token:   token,
-		baseURL: apiBase,
+		http:       &http.Client{Timeout: 20 * time.Second},
+		token:      token,
+		baseURL:    apiBase,
+		retryDelay: time.Second,
 	}
 }
 
@@ -48,6 +59,15 @@ func (c *Client) SetToken(token string) {
 	c.mu.Lock()
 	c.token = token
 	c.mu.Unlock()
+}
+
+// transient marks err as ErrTransient unless the caller's context ended,
+// which is a cancellation or deadline the caller asked for.
+func transient(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrTransient, err)
 }
 
 // CheckAuth verifies the client's token by fetching the authenticated user.
@@ -226,7 +246,25 @@ func (c *Client) CommentsSince(ctx context.Context, issue Issue, since time.Time
 	return fresh, nil
 }
 
+// get fetches rawURL into out, retrying transient failures with backoff.
 func (c *Client) get(ctx context.Context, rawURL string, out any) error {
+	delay := c.retryDelay
+	var err error
+	for attempt := 1; ; attempt++ {
+		err = c.getOnce(ctx, rawURL, out)
+		if err == nil || !errors.Is(err, ErrTransient) || attempt == requestAttempts {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(delay):
+		}
+		delay *= 2
+	}
+}
+
+func (c *Client) getOnce(ctx context.Context, rawURL string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
@@ -243,15 +281,19 @@ func (c *Client) get(ctx context.Context, rawURL string, out any) error {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return transient(ctx, err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
-		return err
+		return transient(ctx, err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		switch resp.StatusCode {
+		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			return fmt.Errorf("%w: GitHub API %s", ErrTransient, resp.Status)
+		}
 		msg := strings.TrimSpace(string(body))
 		if len(msg) > 300 {
 			msg = msg[:300]
