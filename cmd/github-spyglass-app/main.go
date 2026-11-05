@@ -33,17 +33,12 @@ var iconPNG []byte
 // (no config) is 10 via config.RecentCount.
 var recentPresets = []int{5, 10, 25, 50}
 
-type event struct {
-	when  time.Time
-	label string
-	url   string
-}
-
 type app struct {
-	cfgPath   string
-	statePath string
-	logPath   string
-	tokenPath string
+	cfgPath    string
+	statePath  string
+	eventsPath string
+	logPath    string
+	tokenPath  string
 
 	// notifier delivers directly, bypassing the recent-updates recording
 	// (used by the debug test notification).
@@ -52,7 +47,7 @@ type app struct {
 	mu     sync.Mutex
 	cfg    *config.Config
 	st     *state.State
-	events []event // newest first
+	events []state.Event // newest first
 	paused bool
 	seed   bool // next poll seeds state without notifying
 
@@ -121,16 +116,27 @@ func main() {
 		log.Fatalf("loading state: %v", err)
 	}
 
+	eventsPath := state.DefaultEventsPath()
+	events, err := state.LoadEvents(eventsPath)
+	if err != nil {
+		log.Printf("loading recent updates: %v", err) // start with an empty list
+	}
+	if len(events) > config.MaxRecent {
+		events = events[:config.MaxRecent]
+	}
+
 	a := &app{
-		cfgPath:   cfgPath,
-		statePath: statePath,
-		logPath:   logPath,
-		notifier:  notify.New(),
-		cfg:       cfg,
-		st:        st,
-		seed:      firstRun,
-		checkNow:  make(chan struct{}, 1),
-		quit:      make(chan struct{}),
+		eventsPath: eventsPath,
+		events:     events,
+		cfgPath:    cfgPath,
+		statePath:  statePath,
+		logPath:    logPath,
+		notifier:   notify.New(),
+		cfg:        cfg,
+		st:         st,
+		seed:       firstRun,
+		checkNow:   make(chan struct{}, 1),
+		quit:       make(chan struct{}),
 	}
 	a.tokenPath = config.DefaultTokenPath()
 	a.gh = github.New(a.resolveToken())
@@ -179,6 +185,10 @@ func (a *app) onReady() {
 		a.slots[i].Hide()
 		go a.slotClickLoop(i)
 	}
+	a.mu.Lock()
+	restored := a.visibleEventsLocked()
+	a.mu.Unlock()
+	a.renderEvents(restored)
 	systray.AddSeparator()
 
 	check := systray.AddMenuItem("Check Now", "")
@@ -663,7 +673,7 @@ func (a *app) slotClickLoop(i int) {
 		a.mu.Lock()
 		var url string
 		if i < len(a.events) {
-			url = a.events[i].url
+			url = a.events[i].URL
 		}
 		a.mu.Unlock()
 		if url != "" {
@@ -677,11 +687,14 @@ func (a *app) slotClickLoop(i int) {
 func (a *app) addEvent(title, message, url string) {
 	label := truncate(title+" · "+message, 90)
 	a.mu.Lock()
-	a.events = append([]event{{when: time.Now(), label: label, url: url}}, a.events...)
+	a.events = append([]state.Event{{When: time.Now(), Label: label, URL: url}}, a.events...)
 	if len(a.events) > config.MaxRecent {
 		a.events = a.events[:config.MaxRecent]
 	}
 	events := a.visibleEventsLocked()
+	if err := state.SaveEvents(a.eventsPath, a.events); err != nil {
+		log.Printf("saving recent updates: %v", err)
+	}
 	a.mu.Unlock()
 
 	a.renderEvents(events)
@@ -689,7 +702,7 @@ func (a *app) addEvent(title, message, url string) {
 
 // visibleEventsLocked returns the events the dropdown should show under the
 // configured limit. Callers must hold a.mu.
-func (a *app) visibleEventsLocked() []event {
+func (a *app) visibleEventsLocked() []state.Event {
 	if n := a.cfg.RecentCount(); len(a.events) > n {
 		return a.events[:n]
 	}
@@ -697,10 +710,10 @@ func (a *app) visibleEventsLocked() []event {
 }
 
 // renderEvents fills the dropdown's event slots, hiding the unused ones.
-func (a *app) renderEvents(events []event) {
+func (a *app) renderEvents(events []state.Event) {
 	for i, slot := range a.slots {
 		if i < len(events) {
-			slot.SetTitle(events[i].when.Format("15:04") + "  " + events[i].label)
+			slot.SetTitle(events[i].When.Format("15:04") + "  " + events[i].Label)
 			slot.Show()
 		} else {
 			slot.Hide()

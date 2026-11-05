@@ -47,7 +47,7 @@ The GitHub Spyglass icon appears in the menu bar. The dropdown shows:
 
 On first launch it prompts for a filter. Settings live in
 `~/.github-spyglass/config.json` (query, interval, recent count, optional
-token), logs in `~/.github-spyglass/app.log`. The app has no Dock icon; quit
+token), recent updates in `~/.github-spyglass/events.json` (kept across restarts), logs in `~/.github-spyglass/app.log`. The app has no Dock icon; quit
 it from the menu.
 
 Don't run the app and the CLI against the same state file at the same time —
