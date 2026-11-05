@@ -141,3 +141,9 @@ For something that survives reboots, create a LaunchAgent at `~/Library/LaunchAg
 ```
 
 Then `launchctl load ~/Library/LaunchAgents/com.jirwin.github-spyglass.plist`.
+
+## License
+
+[MIT](LICENSE). The vendored [`third_party/systray`](third_party/systray) is a
+modified copy of [fyne-io/systray](https://github.com/fyne-io/systray) and
+keeps its own Apache-2.0 license.
