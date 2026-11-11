@@ -20,7 +20,7 @@ import (
 )
 
 func main() {
-	query := flag.String("query", "", "GitHub search filter (required), e.g. 'repo:elastic/cloud is:issue is:open label:team'")
+	query := flag.String("query", "", "GitHub search filter (required), e.g. 'repo:owner/name is:issue is:open label:team'")
 	interval := flag.Duration("interval", 5*time.Minute, "poll interval")
 	statePath := flag.String("state", state.DefaultPath(), "path to the state file")
 	token := flag.String("token", "", "GitHub token (default: the menu bar app's saved token, $GITHUB_TOKEN, $GH_TOKEN, or 'gh auth token')")
