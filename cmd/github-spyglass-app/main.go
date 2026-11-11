@@ -315,6 +315,13 @@ func (a *app) run() {
 }
 
 func (a *app) poll(ctx context.Context) {
+	// Refresh the list's timestamps so yesterday's "14:25" doesn't linger
+	// as if it were today's after midnight.
+	a.mu.Lock()
+	recent := a.visibleEventsLocked()
+	a.mu.Unlock()
+	a.renderEvents(recent)
+
 	a.mu.Lock()
 	if a.paused || a.cfg.Query == "" {
 		a.mu.Unlock()
@@ -709,11 +716,27 @@ func (a *app) visibleEventsLocked() []state.Event {
 	return a.events
 }
 
+// formatEventTime is a compact timestamp for the recent-updates list: just
+// the time for today's events, and the date before it for older ones, so a
+// list spanning several days stays on one line per update.
+func formatEventTime(when, now time.Time) string {
+	when, now = when.Local(), now.Local()
+	switch {
+	case when.YearDay() == now.YearDay() && when.Year() == now.Year():
+		return when.Format("15:04")
+	case when.Year() == now.Year():
+		return when.Format("Jan 2 15:04")
+	default:
+		return when.Format("Jan 2 2006 15:04")
+	}
+}
+
 // renderEvents fills the dropdown's event slots, hiding the unused ones.
 func (a *app) renderEvents(events []state.Event) {
+	now := time.Now()
 	for i, slot := range a.slots {
 		if i < len(events) {
-			slot.SetTitle(events[i].When.Format("15:04") + "  " + events[i].Label)
+			slot.SetTitle(formatEventTime(events[i].When, now) + "  " + events[i].Label)
 			slot.Show()
 		} else {
 			slot.Hide()

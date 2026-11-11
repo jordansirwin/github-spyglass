@@ -32,7 +32,7 @@ make run-app      # build GitHub Spyglass.app, install to ~/Applications, launch
 The GitHub Spyglass icon appears in the menu bar. The dropdown shows:
 
 - the filter being watched and the last check time
-- the **most recent updates** — click one to open the issue in your browser
+- the **most recent updates**, timestamped (just the time for today, the date for older ones) — click one to open the issue in your browser
 - **Check Now** / **Pause**
 - **Edit Filter…** — change the search filter (takes effect immediately; the new
   filter's existing issues are seeded silently)
