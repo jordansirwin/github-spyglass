@@ -34,14 +34,16 @@ The GitHub Spyglass icon appears in the menu bar. The dropdown shows:
 - the filter being watched and the last check time
 - the **most recent updates**, timestamped (just the time for today, the date for older ones) — click one to open the issue in your browser
 - **Check Now** / **Pause**
-- **Edit Filter…** — change the search filter (takes effect immediately; the new
-  filter's existing issues are seeded silently)
-- **Poll Interval** — pick how often to check (1m–1h, default 5m)
-- **Show Recent Updates** — how many updates the dropdown shows (5/10/25/50,
-  default 10)
-- **Settings** — **Set GitHub Token…** (paste a personal access token; saved to
-  `~/.github-spyglass/token`) and **Start at Login** (registers a login item;
-  macOS will ask to allow controlling System Events the first time)
+- **Settings**, a submenu with:
+  - **Edit Filter…** — change the search filter (takes effect immediately; the
+    new filter's existing issues are seeded silently)
+  - **Poll Interval** — pick how often to check (1m–1h, default 5m)
+  - **Show Recent Updates** — how many updates the dropdown shows (5/10/25/50,
+    default 10)
+  - **Set GitHub Token…** — paste a personal access token (saved to
+    `~/.github-spyglass/token`)
+  - **Start at Login** — registers a login item (macOS will ask to allow
+    controlling System Events the first time)
 - **Debug** — send a test notification, open the log/config/state files or
   the data folder, jump to macOS notification settings
 

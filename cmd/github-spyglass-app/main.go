@@ -195,10 +195,11 @@ func (a *app) onReady() {
 	a.pause = systray.AddMenuItem("Pause", "")
 	systray.AddSeparator()
 
-	filter := systray.AddMenuItem("Edit Filter…", "")
+	settings := systray.AddMenuItem("Settings", "")
+	filter := settings.AddSubMenuItem("Edit Filter…", "")
 
 	cur := a.cfg.PollInterval()
-	a.intervalParent = systray.AddMenuItem("Poll Interval: "+formatDuration(cur), "")
+	a.intervalParent = settings.AddSubMenuItem("Poll Interval: "+formatDuration(cur), "")
 	for _, d := range intervalPresets {
 		item := a.intervalParent.AddSubMenuItemCheckbox(formatDuration(d), "", d == cur)
 		a.intervalItems = append(a.intervalItems, item)
@@ -210,7 +211,7 @@ func (a *app) onReady() {
 	}
 
 	curRecent := a.cfg.RecentCount()
-	a.recentParent = systray.AddMenuItem(fmt.Sprintf("Show Recent Updates: %d", curRecent), "")
+	a.recentParent = settings.AddSubMenuItem(fmt.Sprintf("Show Recent Updates: %d", curRecent), "")
 	for _, n := range recentPresets {
 		item := a.recentParent.AddSubMenuItemCheckbox(fmt.Sprintf("%d", n), "", n == curRecent)
 		a.recentItems = append(a.recentItems, item)
@@ -221,7 +222,6 @@ func (a *app) onReady() {
 		}(n, item)
 	}
 
-	settings := systray.AddMenuItem("Settings", "")
 	setToken := settings.AddSubMenuItem("Set GitHub Token…", "")
 	login := settings.AddSubMenuItemCheckbox("Start at Login", "", false)
 	if bundle := bundlePath(); bundle == "" {
