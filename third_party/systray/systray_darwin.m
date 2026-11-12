@@ -71,10 +71,14 @@ withParentMenuId: (int)theParentMenuId
 @end
 
 
+// Whether Option was held for the most recent menu click.
+static BOOL gOptionOnClick = NO;
+
 @interface SystrayAppDelegate: NSObject <NSApplicationDelegate, NSMenuDelegate>
   - (void) add_or_update_menu_item:(MenuItem*) item;
   - (IBAction)menuHandler:(id)sender;
   - (void)menuWillOpen:(NSMenu*)menu;
+  - (void)set_menu_item_option_title:(NSArray*)args;
   @property (assign) IBOutlet NSWindow *window;
 @end
 
@@ -83,6 +87,13 @@ withParentMenuId: (int)theParentMenuId
   NSStatusItem *statusItem;
   NSMenu *menu;
   NSCondition* cond;
+  // Titles shown in place of a menu item's own while Option is held, by menu
+  // id, and the titles they replaced while swapped in.
+  NSMutableDictionary<NSNumber*, NSString*> *optionTitles;
+  NSMutableDictionary<NSNumber*, NSString*> *swappedOut;
+  NSTimer *optionTimer;
+  BOOL optionSwapped;
+  BOOL optionHeldAtClose; // optionSwapped as the menu closed, which can come before the action
 }
 
 @synthesize window = _window;
@@ -191,11 +202,85 @@ withParentMenuId: (int)theParentMenuId
 - (IBAction)menuHandler:(id)sender
 {
   NSNumber* menuId = [sender representedObject];
+  // Record Option for the Go side before forwarding the click. The reliable
+  // signal is what the user was shown: the timer swaps in the Option titles
+  // while Option is down, and the menu may already have closed (resetting
+  // that state) by the time the action runs. The live flags are a fallback.
+  NSUInteger flags = [NSEvent modifierFlags] | [[NSApp currentEvent] modifierFlags];
+  gOptionOnClick = optionSwapped || optionHeldAtClose || (flags & NSEventModifierFlagOption) != 0;
   systray_menu_item_selected(menuId.intValue);
 }
 
 - (void)menuWillOpen:(NSMenu *)menu {
   systray_menu_will_open();
+  optionHeldAtClose = NO;
+  [self startOptionWatch];
+}
+
+// While the menu is open, watch the Option key and swap in the alternate
+// titles. A timer in the common run-loop modes keeps firing during menu
+// tracking, when ordinary main-thread work is deferred.
+- (void)startOptionWatch {
+  if (optionTimer != nil || [optionTitles count] == 0) {
+    return;
+  }
+  optionTimer = [NSTimer timerWithTimeInterval:0.05
+                                        target:self
+                                      selector:@selector(optionTick:)
+                                      userInfo:nil
+                                       repeats:YES];
+  [[NSRunLoop currentRunLoop] addTimer:optionTimer forMode:NSRunLoopCommonModes];
+  [self optionTick:nil];
+}
+
+- (void)stopOptionWatch {
+  [optionTimer invalidate];
+  optionTimer = nil;
+  [self swapOptionTitles:NO];
+}
+
+- (void)optionTick:(NSTimer *)timer {
+  BOOL down = ([NSEvent modifierFlags] & NSEventModifierFlagOption) != 0;
+  [self swapOptionTitles:down];
+}
+
+- (void)swapOptionTitles:(BOOL)on {
+  if (on == optionSwapped) {
+    return;
+  }
+  optionSwapped = on;
+  if (on) {
+    swappedOut = [NSMutableDictionary dictionary];
+    for (NSNumber *menuId in optionTitles) {
+      NSMenuItem *item = find_menu_item(menu, menuId);
+      if (item != NULL) {
+        swappedOut[menuId] = item.title;
+        item.title = optionTitles[menuId];
+      }
+    }
+  } else {
+    for (NSNumber *menuId in swappedOut) {
+      NSMenuItem *item = find_menu_item(menu, menuId);
+      if (item != NULL) {
+        item.title = swappedOut[menuId];
+      }
+    }
+    swappedOut = nil;
+  }
+}
+
+// args: [menuId (NSNumber), title (NSString, empty to clear)]
+- (void)set_menu_item_option_title:(NSArray *)args {
+  if (optionTitles == nil) {
+    optionTitles = [NSMutableDictionary dictionary];
+  }
+  NSNumber *menuId = args[0];
+  NSString *title = args[1];
+  if ([title length] == 0) {
+    [optionTitles removeObjectForKey:menuId];
+  } else {
+    optionTitles[menuId] = title;
+  }
 }
 
 - (void)add_or_update_menu_item:(MenuItem *)item {
@@ -297,6 +382,8 @@ NSMenuItem *find_menu_item(NSMenu *ourMenu, NSNumber *menuId) {
 }
 
 - (void)menuDidClose:(NSMenu *)menu {
+  optionHeldAtClose = optionSwapped;
+  [self stopOptionWatch];
   // Defer the detach so we don't pull the menu out from under AppKit
   // while it is still tearing the menu down.
   dispatch_async(dispatch_get_main_queue(), ^{
@@ -448,6 +535,17 @@ void add_or_update_menu_item(int menuId, int parentMenuId, char* title, char* to
 void add_separator(int menuId, int parentId) {
   NSNumber *pId = [NSNumber numberWithInt:parentId];
   runInMainThread(@selector(add_separator:), (id)pId);
+}
+
+void set_menu_item_option_title(int menuId, char* title) {
+  NSArray *args = @[ [NSNumber numberWithInt:menuId],
+                     [NSString stringWithUTF8String:title] ];
+  free(title);
+  runInMainThread(@selector(set_menu_item_option_title:), (id)args);
+}
+
+bool option_held_on_click(void) {
+  return gOptionOnClick;
 }
 
 void hide_menu_item(int menuId) {

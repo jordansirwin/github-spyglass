@@ -303,6 +303,25 @@ func (item *MenuItem) Uncheck() {
 	item.update()
 }
 
+// SetOptionTitle sets the title shown in place of the item's own while the
+// Option key is held with the menu open; an empty title clears it. Only
+// available on macOS; elsewhere it does nothing.
+func (item *MenuItem) SetOptionTitle(title string) {
+	menuItemsLock.Lock()
+	_, exists := menuItems[item.id]
+	menuItemsLock.Unlock()
+	if exists {
+		setMenuItemOptionTitle(item, title)
+	}
+}
+
+// OptionHeldOnClick reports whether Option was held for the most recent menu
+// click, so a click handler can tell a plain click from an Option-click. Only
+// available on macOS; elsewhere it is always false.
+func OptionHeldOnClick() bool {
+	return optionHeldOnClick()
+}
+
 // update propagates changes on a menu item to systray
 func (item *MenuItem) update() {
 	menuItemsLock.Lock()

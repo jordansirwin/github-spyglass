@@ -364,6 +364,11 @@ func removeMenuItem(item *MenuItem) {
 	}
 }
 
+// Option-key titles are only implemented on macOS.
+func setMenuItemOptionTitle(item *MenuItem, title string) {}
+
+func optionHeldOnClick() bool { return false }
+
 func hideMenuItem(item *MenuItem) {
 	instance.menuLock.Lock()
 	defer instance.menuLock.Unlock()

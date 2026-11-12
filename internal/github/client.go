@@ -3,6 +3,7 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -59,6 +60,87 @@ func (c *Client) SetToken(token string) {
 	c.mu.Lock()
 	c.token = token
 	c.mu.Unlock()
+}
+
+// Revision is one saved version of an issue description, from GitHub's own
+// edit history (the data behind the "edited" dropdown on an issue).
+type Revision struct {
+	EditedAt time.Time
+	Editor   string // login, "" when unknown (e.g. a deleted account)
+	// Body is the description text as of this revision. HasBody is false when
+	// GitHub no longer has it because the revision history was deleted.
+	Body    string
+	HasBody bool
+}
+
+const descriptionHistoryQuery = `
+query($owner: String!, $name: String!, $number: Int!, $n: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      userContentEdits(first: $n) {
+        nodes { editedAt deletedAt diff editor { login } }
+      }
+    }
+  }
+}`
+
+// DescriptionHistory returns the issue's description revisions, newest first.
+// The newest equals the current description and the oldest is the original
+// text, so n revisions describe n-1 edits. An issue that was never edited has
+// none. At most limit revisions are returned.
+//
+// The history comes from the GraphQL API: each node's "diff" field holds the
+// full description as of that revision rather than a patch, so callers
+// compare consecutive revisions themselves.
+func (c *Client) DescriptionHistory(ctx context.Context, issue Issue, limit int) ([]Revision, error) {
+	owner, name, ok := strings.Cut(issue.Repo(), "/")
+	if !ok || owner == "" || name == "" {
+		return nil, fmt.Errorf("cannot determine the repository of %s", issue.Key())
+	}
+	var resp struct {
+		Data struct {
+			Repository struct {
+				Issue struct {
+					UserContentEdits struct {
+						Nodes []struct {
+							EditedAt  time.Time  `json:"editedAt"`
+							DeletedAt *time.Time `json:"deletedAt"`
+							Diff      *string    `json:"diff"`
+							Editor    *User      `json:"editor"`
+						} `json:"nodes"`
+					} `json:"userContentEdits"`
+				} `json:"issue"`
+			} `json:"repository"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	err := c.request(ctx, http.MethodPost, c.baseURL+"/graphql", map[string]any{
+		"query": descriptionHistoryQuery,
+		"variables": map[string]any{
+			"owner": owner, "name": name, "number": issue.Number, "n": limit,
+		},
+	}, &resp)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Errors) > 0 {
+		return nil, fmt.Errorf("GitHub GraphQL: %s", resp.Errors[0].Message)
+	}
+	nodes := resp.Data.Repository.Issue.UserContentEdits.Nodes
+	revs := make([]Revision, 0, len(nodes))
+	for _, n := range nodes {
+		r := Revision{EditedAt: n.EditedAt, HasBody: n.Diff != nil && n.DeletedAt == nil}
+		if r.HasBody {
+			r.Body = *n.Diff
+		}
+		if n.Editor != nil {
+			r.Editor = n.Editor.Login
+		}
+		revs = append(revs, r)
+	}
+	return revs, nil
 }
 
 // transient marks err as ErrTransient unless the caller's context ended,
@@ -248,10 +330,24 @@ func (c *Client) CommentsSince(ctx context.Context, issue Issue, since time.Time
 
 // get fetches rawURL into out, retrying transient failures with backoff.
 func (c *Client) get(ctx context.Context, rawURL string, out any) error {
+	return c.request(ctx, http.MethodGet, rawURL, nil, out)
+}
+
+// request sends one API request, retrying transient failures with backoff.
+// payload, when non-nil, is sent as the JSON body. Only idempotent requests
+// (GETs and read-only GraphQL queries) go through here.
+func (c *Client) request(ctx context.Context, method, rawURL string, payload any, out any) error {
+	var body []byte
+	if payload != nil {
+		var err error
+		if body, err = json.Marshal(payload); err != nil {
+			return err
+		}
+	}
 	delay := c.retryDelay
 	var err error
 	for attempt := 1; ; attempt++ {
-		err = c.getOnce(ctx, rawURL, out)
+		err = c.requestOnce(ctx, method, rawURL, body, out)
 		if err == nil || !errors.Is(err, ErrTransient) || attempt == requestAttempts {
 			return err
 		}
@@ -264,10 +360,17 @@ func (c *Client) get(ctx context.Context, rawURL string, out any) error {
 	}
 }
 
-func (c *Client) getOnce(ctx context.Context, rawURL string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+func (c *Client) requestOnce(ctx context.Context, method, rawURL string, payload []byte, out any) error {
+	var reader io.Reader
+	if payload != nil {
+		reader = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, reader)
 	if err != nil {
 		return err
+	}
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")

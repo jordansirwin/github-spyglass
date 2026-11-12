@@ -153,6 +153,14 @@ func hideMenuItem(item *MenuItem) {
 	)
 }
 
+func setMenuItemOptionTitle(item *MenuItem, title string) {
+	C.set_menu_item_option_title(C.int(item.id), C.CString(title))
+}
+
+func optionHeldOnClick() bool {
+	return bool(C.option_held_on_click())
+}
+
 func showMenuItem(item *MenuItem) {
 	C.show_menu_item(
 		C.int(item.id),

@@ -1099,6 +1099,11 @@ func addSeparator(id uint32, parent uint32) {
 	}
 }
 
+// Option-key titles are only implemented on macOS.
+func setMenuItemOptionTitle(item *MenuItem, title string) {}
+
+func optionHeldOnClick() bool { return false }
+
 func hideMenuItem(item *MenuItem) {
 	err := wt.hideMenuItem(uint32(item.id), item.parentId())
 	if err != nil {

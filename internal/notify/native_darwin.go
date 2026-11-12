@@ -26,16 +26,18 @@ func nativeInit() {
 }
 
 // nativeNotify posts a notification through Notification Center as this app.
-func nativeNotify(title, subtitle, body, url string) {
+// A non-empty diffPath adds a "View Diff" action opening that file.
+func nativeNotify(title, subtitle, body, url, diffPath string) {
 	ident := fmt.Sprintf("github-spyglass-%d", time.Now().UnixNano())
 	cIdent, cTitle, cSubtitle := C.CString(ident), C.CString(title), C.CString(subtitle)
-	cBody, cURL := C.CString(body), C.CString(url)
+	cBody, cURL, cDiff := C.CString(body), C.CString(url), C.CString(diffPath)
 	defer func() {
 		C.free(unsafe.Pointer(cIdent))
 		C.free(unsafe.Pointer(cTitle))
 		C.free(unsafe.Pointer(cSubtitle))
 		C.free(unsafe.Pointer(cBody))
 		C.free(unsafe.Pointer(cURL))
+		C.free(unsafe.Pointer(cDiff))
 	}()
-	C.spyglass_notify(cIdent, cTitle, cSubtitle, cBody, cURL)
+	C.spyglass_notify(cIdent, cTitle, cSubtitle, cBody, cURL, cDiff)
 }

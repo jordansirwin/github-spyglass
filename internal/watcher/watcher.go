@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jirwin/github-spyglass/internal/diff"
 	"github.com/jirwin/github-spyglass/internal/github"
 	"github.com/jirwin/github-spyglass/internal/state"
 )
@@ -23,12 +24,22 @@ const maxNotificationsPerPoll = 10
 type GitHub interface {
 	SearchIssues(ctx context.Context, query string) ([]github.Issue, error)
 	CommentsSince(ctx context.Context, issue github.Issue, since time.Time) ([]github.Comment, error)
+	// DescriptionHistory returns the issue's description revisions, newest first.
+	DescriptionHistory(ctx context.Context, issue github.Issue, limit int) ([]github.Revision, error)
 }
 
 // Notifier delivers a user-facing notification. A non-empty url is opened
 // when the notification is clicked.
 type Notifier interface {
 	Notify(title, subtitle, message, url string) error
+}
+
+// DiffNotifier is a Notifier that can attach a "view diff" action to a
+// notification about an edited description. The watcher uses it when the
+// notifier implements it and falls back to Notify otherwise.
+type DiffNotifier interface {
+	Notifier
+	NotifyDescriptionChange(title, subtitle, message, url string, change diff.Change) error
 }
 
 type Watcher struct {
@@ -52,17 +63,29 @@ func (w *Watcher) Poll(ctx context.Context, st *state.State, seedOnly bool) erro
 
 	now := time.Now().UTC()
 	sent := 0
-	notify := func(title, subtitle, message, url string) {
+	// send delivers one notification, with a diff action when change is set
+	// and the notifier supports it.
+	send := func(title, subtitle, message, url string, change *diff.Change) {
 		if seedOnly || sent >= maxNotificationsPerPoll {
 			return
 		}
 		sent++
 		if sent == maxNotificationsPerPoll {
 			message = "(more updates suppressed this poll)"
+			change = nil
 		}
-		if err := w.Notifier.Notify(title, subtitle, message, url); err != nil {
+		var err error
+		if dn, ok := w.Notifier.(DiffNotifier); ok && change != nil {
+			err = dn.NotifyDescriptionChange(title, subtitle, message, url, *change)
+		} else {
+			err = w.Notifier.Notify(title, subtitle, message, url)
+		}
+		if err != nil {
 			log.Printf("notification failed: %v", err)
 		}
+	}
+	notify := func(title, subtitle, message, url string) {
+		send(title, subtitle, message, url, nil)
 	}
 
 	for _, issue := range issues {
@@ -115,8 +138,12 @@ func (w *Watcher) Poll(ctx context.Context, st *state.State, seedOnly bool) erro
 			}
 
 			if changes := describeChanges(prev, issue); len(changes) > 0 {
-				notify("Updated: "+key, truncate(issue.Title, 60),
-					condense(strings.Join(changes, ", "), 200), issue.HTMLURL)
+				var change *diff.Change
+				if descriptionEdited(prev, issue) {
+					change = w.descriptionChange(ctx, key, issue, prev)
+				}
+				send("Updated: "+key, truncate(issue.Title, 60),
+					condense(strings.Join(changes, ", "), 200), issue.HTMLURL, change)
 			} else if !reported {
 				notify("Updated: "+key, truncate(issue.Title, 60),
 					"Issue was edited, labeled, or otherwise changed", issue.HTMLURL)
@@ -155,10 +182,54 @@ func describeChanges(prev state.IssueState, issue github.Issue) []string {
 			changes = append(changes, "milestone set to "+cur)
 		}
 	}
-	if hashBody(issue.Body) != prev.BodyHash {
+	if descriptionEdited(prev, issue) {
 		changes = append(changes, "description edited")
 	}
 	return changes
+}
+
+// maxDiffEdits caps how many edits one diff page shows.
+const maxDiffEdits = 10
+
+// descriptionChange builds the diff for an edited description from GitHub's
+// own revision history, covering every edit made since the issue was last
+// seen (at least the newest). It returns nil when the notifier can't show
+// diffs or the history is unavailable, in which case the notification goes
+// out without a diff button.
+func (w *Watcher) descriptionChange(ctx context.Context, key string, issue github.Issue, prev state.IssueState) *diff.Change {
+	if _, ok := w.Notifier.(DiffNotifier); !ok {
+		return nil
+	}
+	revs, err := w.Client.DescriptionHistory(ctx, issue, maxDiffEdits+1)
+	if err != nil {
+		log.Printf("fetching description history for %s: %v", key, err)
+		return nil
+	}
+	// n revisions describe n-1 edits: each edit turned revs[k+1] into revs[k].
+	var edits []diff.Edit
+	for k := 0; k+1 < len(revs); k++ {
+		r, before := revs[k], revs[k+1]
+		if len(edits) > 0 && !r.EditedAt.After(prev.UpdatedAt) {
+			break // older than what we last saw
+		}
+		edits = append(edits, diff.Edit{
+			When:   r.EditedAt,
+			Editor: r.Editor,
+			Old:    before.Body,
+			New:    r.Body,
+			Known:  r.HasBody && before.HasBody,
+		})
+	}
+	if len(edits) == 0 {
+		return nil
+	}
+	return &diff.Change{Key: key, Title: issue.Title, URL: issue.HTMLURL, Edits: edits}
+}
+
+// descriptionEdited reports whether the issue's description differs from the
+// snapshot. Entries without a snapshot (empty BodyHash) never count.
+func descriptionEdited(prev state.IssueState, issue github.Issue) bool {
+	return prev.BodyHash != "" && hashBody(issue.Body) != prev.BodyHash
 }
 
 // diffSet returns the elements added to and removed from old, in input order.

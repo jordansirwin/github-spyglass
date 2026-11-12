@@ -13,6 +13,14 @@ You get notified when a matched issue:
 - is otherwise **edited** (title, body, labels, assignees, ...)
 - **newly matches** the filter
 
+When a description is edited, the notification has a **View Diff** action that
+opens what changed in your browser, with the changed words highlighted. The
+history comes from GitHub's own edit history (the data behind the "edited"
+dropdown on an issue), so every edit since the app last saw the issue is listed
+with who made it and when. macOS shows notification actions when you hover over
+the banner (or choose "Alerts" in System Settings → Notifications to keep them
+on screen). Diff pages are saved under `~/.github-spyglass/diffs/` for 14 days.
+
 ## Screenshots
 
 <strong>Menu bar</strong>
@@ -32,7 +40,7 @@ make run-app      # build GitHub Spyglass.app, install to ~/Applications, launch
 The GitHub Spyglass icon appears in the menu bar. The dropdown shows:
 
 - the filter being watched and the last check time
-- the **most recent updates**, timestamped (just the time for today, the date for older ones) — click one to open the issue in your browser
+- the **most recent updates**, timestamped (just the time for today, the date for older ones) — click one to open the issue in your browser; hold **⌥ (Option)** over an update that edited a description to turn it into **View Diff** (a hint above the list says so)
 - **Check Now** / **Pause**
 - **Settings**, a submenu with:
   - **Edit Filter…** — change the search filter (takes effect immediately; the
@@ -45,7 +53,7 @@ The GitHub Spyglass icon appears in the menu bar. The dropdown shows:
   - **Start at Login** — registers a login item (macOS will ask to allow
     controlling System Events the first time)
 - **Debug** — send a test notification, open the log/config/state files or
-  the data folder, jump to macOS notification settings
+  the data folder, send a test diff notification, jump to macOS notification settings
 
 On first launch it prompts for a filter. Settings live in
 `~/.github-spyglass/config.json` (query, interval, recent count, optional

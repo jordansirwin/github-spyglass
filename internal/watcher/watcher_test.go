@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jirwin/github-spyglass/internal/diff"
 	"github.com/jirwin/github-spyglass/internal/github"
 	"github.com/jirwin/github-spyglass/internal/state"
 )
@@ -14,6 +15,15 @@ import (
 type fakeGitHub struct {
 	issues   []github.Issue
 	comments []github.Comment
+
+	revisions    []github.Revision // description history, newest first
+	historyErr   error
+	historyCalls int
+}
+
+func (f *fakeGitHub) DescriptionHistory(ctx context.Context, issue github.Issue, limit int) ([]github.Revision, error) {
+	f.historyCalls++
+	return f.revisions, f.historyErr
 }
 
 func (f *fakeGitHub) SearchIssues(ctx context.Context, query string) ([]github.Issue, error) {
@@ -34,6 +44,18 @@ type fakeNotifier struct {
 
 func (f *fakeNotifier) Notify(title, subtitle, message, url string) error {
 	f.sent = append(f.sent, notification{title, subtitle, message, url})
+	return nil
+}
+
+// fakeDiffNotifier also supports the "view diff" action.
+type fakeDiffNotifier struct {
+	fakeNotifier
+	changes []diff.Change
+}
+
+func (f *fakeDiffNotifier) NotifyDescriptionChange(title, subtitle, message, url string, change diff.Change) error {
+	f.sent = append(f.sent, notification{title, subtitle, message, url})
+	f.changes = append(f.changes, change)
 	return nil
 }
 
@@ -376,5 +398,170 @@ func TestCondense(t *testing.T) {
 		if got := condense(tc.in, tc.max); got != tc.want {
 			t.Errorf("condense(%q, %d) = %q, want %q", tc.in, tc.max, got, tc.want)
 		}
+	}
+}
+
+// rev builds a description revision.
+func rev(at time.Time, editor, body string) github.Revision {
+	return github.Revision{EditedAt: at, Editor: editor, Body: body, HasBody: true}
+}
+
+// pollEdit seeds an issue, then polls again after it was edited (the edit
+// callback may change the issue). revs is the history GitHub reports.
+func pollEdit(t *testing.T, n Notifier, revs []github.Revision, edit func(*github.Issue)) *fakeGitHub {
+	t.Helper()
+	before := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	issue := testIssue(1, before, 0, "open")
+	issue.Body = "original description"
+	gh := &fakeGitHub{issues: []github.Issue{issue}, revisions: revs}
+	st := state.New()
+	w := &Watcher{Client: gh, Notifier: n, Query: "repo:owner/repo is:issue"}
+	if err := w.Poll(context.Background(), st, true); err != nil {
+		t.Fatal(err)
+	}
+	changed := testIssue(1, before.Add(time.Minute), 0, "open")
+	changed.Body = "rewritten description"
+	if edit != nil {
+		edit(&changed)
+	}
+	gh.issues = []github.Issue{changed}
+	if err := w.Poll(context.Background(), st, false); err != nil {
+		t.Fatal(err)
+	}
+	return gh
+}
+
+// editTime is a time after the seeded poll's updated_at (an hour ago) so
+// revisions at editTime(n) count as edits made since the issue was last seen.
+func editTime(minutes int) time.Time {
+	return time.Now().UTC().Add(-time.Hour).Truncate(time.Second).Add(time.Duration(minutes) * time.Minute)
+}
+
+func TestDescriptionEditAttachesDiffFromHistory(t *testing.T) {
+	n := &fakeDiffNotifier{}
+	pollEdit(t, n, []github.Revision{
+		rev(editTime(1), "alice", "rewritten description"),
+		rev(editTime(-30), "alice", "original description"),
+	}, nil)
+
+	if len(n.sent) != 1 || len(n.changes) != 1 {
+		t.Fatalf("sent=%d changes=%d, want 1 each", len(n.sent), len(n.changes))
+	}
+	c := n.changes[0]
+	if c.Key != "owner/repo#1" || c.Title != "Test issue 1" || !strings.HasSuffix(c.URL, "/issues/1") {
+		t.Errorf("change identity = %+v", c)
+	}
+	if len(c.Edits) != 1 {
+		t.Fatalf("edits = %d, want 1", len(c.Edits))
+	}
+	e := c.Edits[0]
+	if e.Old != "original description" || e.New != "rewritten description" || e.Editor != "alice" || !e.Known {
+		t.Errorf("edit = %+v", e)
+	}
+}
+
+func TestEverySinceLastSeenEditIsListedNewestFirst(t *testing.T) {
+	n := &fakeDiffNotifier{}
+	pollEdit(t, n, []github.Revision{
+		rev(editTime(5), "carol", "v4"),
+		rev(editTime(3), "bob", "v3"),
+		rev(editTime(1), "alice", "v2"),
+		rev(editTime(-30), "alice", "v1"), // an edit before the last poll: already seen
+		rev(editTime(-60), "alice", "v0"),
+	}, nil)
+
+	if len(n.changes) != 1 {
+		t.Fatalf("changes = %d", len(n.changes))
+	}
+	edits := n.changes[0].Edits
+	if len(edits) != 3 {
+		t.Fatalf("edits = %d, want the 3 made since the last poll: %+v", len(edits), edits)
+	}
+	want := []struct{ editor, old, new string }{{"carol", "v3", "v4"}, {"bob", "v2", "v3"}, {"alice", "v1", "v2"}}
+	for i, w := range want {
+		if edits[i].Editor != w.editor || edits[i].Old != w.old || edits[i].New != w.new {
+			t.Errorf("edit %d = %+v, want %+v", i, edits[i], w)
+		}
+	}
+}
+
+func TestNewestEditShownEvenIfTimestampLooksOld(t *testing.T) {
+	n := &fakeDiffNotifier{}
+	// Clock skew: the revision's time isn't after the last poll, but the
+	// description did change, so the newest edit is still shown.
+	pollEdit(t, n, []github.Revision{
+		rev(editTime(-5), "alice", "rewritten description"),
+		rev(editTime(-30), "alice", "original description"),
+	}, nil)
+	if len(n.changes) != 1 || len(n.changes[0].Edits) != 1 {
+		t.Errorf("changes = %+v", n.changes)
+	}
+}
+
+func TestDeletedRevisionIsMarkedUnknown(t *testing.T) {
+	n := &fakeDiffNotifier{}
+	pollEdit(t, n, []github.Revision{
+		rev(editTime(1), "alice", "rewritten description"),
+		{EditedAt: editTime(-30), Editor: "alice", HasBody: false},
+	}, nil)
+	if len(n.changes) != 1 || n.changes[0].Edits[0].Known {
+		t.Errorf("an edit whose previous text was deleted must be Known=false: %+v", n.changes)
+	}
+}
+
+func TestHistoryProblemsStillNotifyWithoutDiff(t *testing.T) {
+	cases := map[string]struct {
+		revs []github.Revision
+		err  error
+	}{
+		"history request fails":     {err: fmt.Errorf("boom")},
+		"history empty":             {},
+		"only the original present": {revs: []github.Revision{rev(editTime(-30), "alice", "original description")}},
+	}
+	for name, tc := range cases {
+		n := &fakeDiffNotifier{}
+		before := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+		issue := testIssue(1, before, 0, "open")
+		issue.Body = "original description"
+		gh := &fakeGitHub{issues: []github.Issue{issue}, revisions: tc.revs, historyErr: tc.err}
+		st := state.New()
+		w := &Watcher{Client: gh, Notifier: n, Query: "q"}
+		if err := w.Poll(context.Background(), st, true); err != nil {
+			t.Fatal(err)
+		}
+		changed := testIssue(1, before.Add(time.Minute), 0, "open")
+		changed.Body = "rewritten description"
+		gh.issues = []github.Issue{changed}
+		if err := w.Poll(context.Background(), st, false); err != nil {
+			t.Fatalf("%s: poll must not fail: %v", name, err)
+		}
+		if len(n.sent) != 1 || !strings.Contains(n.sent[0].message, "description edited") {
+			t.Errorf("%s: want one plain notification, got %+v", name, n.sent)
+		}
+		if len(n.changes) != 0 {
+			t.Errorf("%s: no diff should be offered, got %+v", name, n.changes)
+		}
+	}
+}
+
+func TestNoHistoryRequestUnlessADiffCanBeShown(t *testing.T) {
+	// A label-only edit never needs the history.
+	n := &fakeDiffNotifier{}
+	gh := pollEdit(t, n, []github.Revision{rev(editTime(1), "a", "x"), rev(editTime(-1), "a", "y")}, func(i *github.Issue) {
+		i.Body = "original description"
+		i.Labels = []github.Label{{Name: "triage"}}
+	})
+	if gh.historyCalls != 0 || len(n.changes) != 0 {
+		t.Errorf("label edit: historyCalls=%d changes=%d, want 0 and 0", gh.historyCalls, len(n.changes))
+	}
+
+	// A notifier without diff support doesn't need it either.
+	plain := &fakeNotifier{}
+	gh = pollEdit(t, plain, []github.Revision{rev(editTime(1), "a", "x"), rev(editTime(-1), "a", "y")}, nil)
+	if gh.historyCalls != 0 {
+		t.Errorf("plain notifier: historyCalls = %d, want 0", gh.historyCalls)
+	}
+	if len(plain.sent) != 1 || !strings.Contains(plain.sent[0].message, "description edited") {
+		t.Errorf("plain notifier sent %+v", plain.sent)
 	}
 }

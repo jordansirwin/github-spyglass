@@ -20,6 +20,7 @@ import (
 	"fyne.io/systray"
 
 	"github.com/jirwin/github-spyglass/internal/config"
+	"github.com/jirwin/github-spyglass/internal/diff"
 	"github.com/jirwin/github-spyglass/internal/github"
 	"github.com/jirwin/github-spyglass/internal/notify"
 	"github.com/jirwin/github-spyglass/internal/state"
@@ -42,7 +43,7 @@ type app struct {
 
 	// notifier delivers directly, bypassing the recent-updates recording
 	// (used by the debug test notification).
-	notifier watcher.Notifier
+	notifier *notify.Notifier
 
 	mu     sync.Mutex
 	cfg    *config.Config
@@ -66,12 +67,17 @@ type app struct {
 	lastCheck      *systray.MenuItem
 	empty          *systray.MenuItem
 	slots          [config.MaxRecent]*systray.MenuItem
+	hint           *systray.MenuItem // explains the Option-for-diff shortcut
 	pause          *systray.MenuItem
 	intervalParent *systray.MenuItem
 	intervalItems  []*systray.MenuItem
 	recentParent   *systray.MenuItem
 	recentItems    []*systray.MenuItem
 }
+
+// diffRetention is how long saved diff pages are kept; notifications older
+// than this can no longer open theirs.
+const diffRetention = 14 * 24 * time.Hour
 
 // transientFailsBeforeNotify is how many consecutive network-failure polls
 // it takes before the user is notified.
@@ -115,6 +121,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("loading state: %v", err)
 	}
+
+	diff.Prune(diff.DefaultDir(), diffRetention, time.Now())
 
 	eventsPath := state.DefaultEventsPath()
 	events, err := state.LoadEvents(eventsPath)
@@ -178,6 +186,9 @@ func (a *app) onReady() {
 	a.lastCheck.Disable()
 	systray.AddSeparator()
 
+	a.hint = systray.AddMenuItem("Hold ⌥ (Option) on an edited update to view its diff", "")
+	a.hint.Disable()
+	a.hint.Hide()
 	a.empty = systray.AddMenuItem("No updates yet", "")
 	a.empty.Disable()
 	for i := range a.slots {
@@ -238,6 +249,7 @@ func (a *app) onReady() {
 
 	debug := systray.AddMenuItem("Debug", "")
 	testNotif := debug.AddSubMenuItem("Send Test Notification", "")
+	testDiff := debug.AddSubMenuItem("Send Test Diff Notification", "")
 	openLog := debug.AddSubMenuItem("Open Log", "")
 	if a.logPath == "" {
 		openLog.Disable()
@@ -265,6 +277,8 @@ func (a *app) onReady() {
 				a.toggleLogin(login)
 			case <-testNotif.ClickedCh:
 				a.sendTestNotification()
+			case <-testDiff.ClickedCh:
+				a.sendTestDiffNotification()
 			case <-openLog.ClickedCh:
 				openPath(a.logPath)
 			case <-openConfig.ClickedCh:
@@ -643,6 +657,35 @@ func (a *app) toggleLogin(item *systray.MenuItem) {
 	}
 }
 
+// sendTestDiffNotification fires a notification with a View Diff action on
+// sample text, for checking that the button and the diff page work.
+func (a *app) sendTestDiffNotification() {
+	log.Printf("sending test diff notification")
+	change := diff.Change{
+		Key:   "owner/repo#1",
+		Title: "Sample issue for the diff test",
+		URL:   "https://github.com",
+		Edits: []diff.Edit{{
+			When:   time.Now(),
+			Editor: "octocat",
+			Old: "Steps to reproduce:\n1. Open the app\n2. Click the menu bar icon\n3. Nothing happens\n\n" +
+				"Expected: the menu opens.",
+			New: "Steps to reproduce:\n1. Open the app\n2. Click the menu bar icon twice\n3. The menu flickers\n\n" +
+				"Expected: the menu opens and stays open.\nEnvironment: macOS 15",
+			Known: true,
+		}},
+	}
+	path, err := diff.WriteFile(diff.DefaultDir(), change)
+	if err != nil {
+		a.reportError("test diff", err)
+		return
+	}
+	if err := a.notifier.NotifyWithDiff("GitHub Spyglass", "Test",
+		"Description edited — expand the notification and choose View Diff.", "https://github.com", path); err != nil {
+		log.Printf("test diff notification: %v", err)
+	}
+}
+
 // sendTestNotification fires one notification directly (not recorded in the
 // recent-updates list): for checking delivery, permission, and the icon.
 func (a *app) sendTestNotification() {
@@ -675,14 +718,31 @@ func openTextFile(path string) {
 	}
 }
 
+// diffAvailable reports whether a saved diff page still exists; old ones are
+// pruned after diffRetention.
+func diffAvailable(path string) bool {
+	if path == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 func (a *app) slotClickLoop(i int) {
 	for range a.slots[i].ClickedCh {
+		// Option held on the click: this row was showing "View Diff".
+		optionHeld := systray.OptionHeldOnClick()
 		a.mu.Lock()
-		var url string
+		var url, diffPath string
 		if i < len(a.events) {
 			url = a.events[i].URL
+			diffPath = a.events[i].DiffPath
 		}
 		a.mu.Unlock()
+		if optionHeld && diffAvailable(diffPath) {
+			openPath(diffPath)
+			continue
+		}
 		if url != "" {
 			if err := exec.Command("open", url).Run(); err != nil {
 				log.Printf("opening %s: %v", url, err)
@@ -691,10 +751,10 @@ func (a *app) slotClickLoop(i int) {
 	}
 }
 
-func (a *app) addEvent(title, message, url string) {
+func (a *app) addEvent(title, message, url, diffPath string) {
 	label := truncate(title+" · "+message, 90)
 	a.mu.Lock()
-	a.events = append([]state.Event{{When: time.Now(), Label: label, URL: url}}, a.events...)
+	a.events = append([]state.Event{{When: time.Now(), Label: label, URL: url, DiffPath: diffPath}}, a.events...)
 	if len(a.events) > config.MaxRecent {
 		a.events = a.events[:config.MaxRecent]
 	}
@@ -734,13 +794,29 @@ func formatEventTime(when, now time.Time) string {
 // renderEvents fills the dropdown's event slots, hiding the unused ones.
 func (a *app) renderEvents(events []state.Event) {
 	now := time.Now()
+	anyDiff := false
 	for i, slot := range a.slots {
 		if i < len(events) {
-			slot.SetTitle(formatEventTime(events[i].When, now) + "  " + events[i].Label)
+			label := formatEventTime(events[i].When, now) + "  " + events[i].Label
+			slot.SetTitle(label)
 			slot.Show()
+			// Holding Option swaps the row's title for a "View Diff" one; the
+			// click handler opens the diff when Option is down.
+			if diffAvailable(events[i].DiffPath) {
+				slot.SetOptionTitle("View Diff  ·  " + label)
+				anyDiff = true
+			} else {
+				slot.SetOptionTitle("")
+			}
 		} else {
 			slot.Hide()
+			slot.SetOptionTitle("")
 		}
+	}
+	if anyDiff {
+		a.hint.Show()
+	} else {
+		a.hint.Hide()
 	}
 	if len(events) == 0 {
 		a.empty.Show()
@@ -776,12 +852,28 @@ func (a *app) setRecent(n int) {
 // updates list before delivering it.
 type recordingNotifier struct {
 	app   *app
-	inner watcher.Notifier
+	inner *notify.Notifier
 }
 
 func (r *recordingNotifier) Notify(title, subtitle, message, url string) error {
-	r.app.addEvent(title, message, url)
+	r.app.addEvent(title, message, url, "")
 	return r.inner.Notify(title, subtitle, message, url)
+}
+
+var _ watcher.DiffNotifier = (*recordingNotifier)(nil)
+
+// NotifyDescriptionChange renders the edit as a diff page and delivers the
+// notification with a View Diff action. If the page can't be written, the
+// notification still goes out without the button.
+func (r *recordingNotifier) NotifyDescriptionChange(title, subtitle, message, url string, change diff.Change) error {
+	path, err := diff.WriteFile(diff.DefaultDir(), change)
+	if err != nil {
+		log.Printf("writing diff for %s: %v", change.Key, err)
+		r.app.addEvent(title, message, url, "")
+		return r.inner.Notify(title, subtitle, message, url)
+	}
+	r.app.addEvent(title, message, url, path)
+	return r.inner.NotifyWithDiff(title, subtitle, message, url, path)
 }
 
 // bundlePath returns the containing .app bundle, or "" when running outside

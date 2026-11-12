@@ -12,8 +12,10 @@ bool spyglass_notify_available(void);
 void spyglass_notify_init(void);
 
 // Posts a notification. url, carried in userInfo, is opened when the
-// notification is clicked.
+// notification is clicked. A non-empty diffPath adds a "View Diff" action
+// that opens that local file.
 void spyglass_notify(const char *ident, const char *title,
-                     const char *subtitle, const char *body, const char *url);
+                     const char *subtitle, const char *body, const char *url,
+                     const char *diffPath);
 
 #endif

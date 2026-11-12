@@ -331,3 +331,103 @@ func TestCancelledContextIsNotTransient(t *testing.T) {
 		t.Errorf("cancelled context should not be transient: %v", err)
 	}
 }
+
+func historyIssue() Issue {
+	return Issue{Number: 7, RepositoryURL: "https://api.github.com/repos/owner/repo"}
+}
+
+func TestDescriptionHistory(t *testing.T) {
+	var gotReq struct {
+		Query     string
+		Variables map[string]any
+	}
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/graphql" {
+			t.Errorf("request = %s %s, want POST /graphql", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			t.Errorf("missing auth header")
+		}
+		json.NewDecoder(r.Body).Decode(&gotReq)
+		fmt.Fprint(w, `{"data":{"repository":{"issue":{"userContentEdits":{"nodes":[
+			{"editedAt":"2026-11-12T10:05:00Z","deletedAt":null,"diff":"new text","editor":{"login":"alice"}},
+			{"editedAt":"2026-11-12T10:00:00Z","deletedAt":"2026-11-12T11:00:00Z","diff":null,"editor":null}
+		]}}}}}`)
+	}))
+
+	revs, err := c.DescriptionHistory(context.Background(), historyIssue(), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotReq.Variables["owner"] != "owner" || gotReq.Variables["name"] != "repo" ||
+		gotReq.Variables["number"] != float64(7) || gotReq.Variables["n"] != float64(5) {
+		t.Errorf("variables = %v", gotReq.Variables)
+	}
+	if !strings.Contains(gotReq.Query, "userContentEdits") {
+		t.Errorf("query = %q", gotReq.Query)
+	}
+	if len(revs) != 2 {
+		t.Fatalf("revisions = %d, want 2", len(revs))
+	}
+	if revs[0].Body != "new text" || !revs[0].HasBody || revs[0].Editor != "alice" ||
+		!revs[0].EditedAt.Equal(time.Date(2026, 11, 12, 10, 5, 0, 0, time.UTC)) {
+		t.Errorf("revs[0] = %+v", revs[0])
+	}
+	if revs[1].HasBody || revs[1].Editor != "" {
+		t.Errorf("a deleted revision has no body or editor: %+v", revs[1])
+	}
+}
+
+func TestDescriptionHistoryNeverEdited(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":{"repository":{"issue":{"userContentEdits":{"nodes":[]}}}}}`)
+	}))
+	revs, err := c.DescriptionHistory(context.Background(), historyIssue(), 5)
+	if err != nil || len(revs) != 0 {
+		t.Errorf("revs = %v, err = %v, want none", revs, err)
+	}
+}
+
+func TestDescriptionHistoryGraphQLErrors(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"errors":[{"message":"Could not resolve to a Repository"}]}`)
+	}))
+	_, err := c.DescriptionHistory(context.Background(), historyIssue(), 5)
+	if err == nil || !strings.Contains(err.Error(), "Could not resolve") {
+		t.Errorf("err = %v, want the GraphQL error message", err)
+	}
+}
+
+func TestDescriptionHistoryBadCredentials(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"message":"Bad credentials"}`)
+	}))
+	if _, err := c.DescriptionHistory(context.Background(), historyIssue(), 5); !errors.Is(err, ErrUnauthorized) {
+		t.Errorf("err = %v, want ErrUnauthorized", err)
+	}
+}
+
+func TestDescriptionHistoryRetriesTransientFailures(t *testing.T) {
+	var calls atomic.Int32
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) < 2 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		fmt.Fprint(w, `{"data":{"repository":{"issue":{"userContentEdits":{"nodes":[]}}}}}`)
+	}))
+	if _, err := c.DescriptionHistory(context.Background(), historyIssue(), 5); err != nil {
+		t.Fatalf("POST should be retried like GET: %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Errorf("calls = %d, want 2", calls.Load())
+	}
+}
+
+func TestDescriptionHistoryUnknownRepo(t *testing.T) {
+	c := testClient(t, http.NotFoundHandler())
+	if _, err := c.DescriptionHistory(context.Background(), Issue{Number: 1}, 5); err == nil {
+		t.Error("want error when the repository can't be determined")
+	}
+}

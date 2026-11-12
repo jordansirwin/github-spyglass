@@ -15,6 +15,8 @@ type Event struct {
 	When  time.Time `json:"when"`
 	Label string    `json:"label"`
 	URL   string    `json:"url,omitempty"`
+	// DiffPath is the saved diff page for an edited description, if any.
+	DiffPath string `json:"diff_path,omitempty"`
 }
 
 // DefaultEventsPath returns the default recent-updates file location. It is

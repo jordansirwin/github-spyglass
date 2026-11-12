@@ -39,7 +39,7 @@ func New() *Notifier {
 
 func (n *Notifier) Notify(title, subtitle, message, url string) error {
 	if n.native {
-		nativeNotify(title, subtitle, message, url)
+		nativeNotify(title, subtitle, message, url, "")
 		return nil
 	}
 
@@ -57,6 +57,17 @@ func (n *Notifier) Notify(title, subtitle, message, url string) error {
 	script := fmt.Sprintf("display notification %s with title %s subtitle %s sound name \"default\"",
 		appleScriptString(message), appleScriptString(title), appleScriptString(subtitle))
 	return exec.Command("osascript", "-e", script).Run()
+}
+
+// NotifyWithDiff is Notify plus a "View Diff" action that opens the local
+// file at diffPath. Only native notifications can carry an action; the other
+// delivery methods send a plain notification.
+func (n *Notifier) NotifyWithDiff(title, subtitle, message, url, diffPath string) error {
+	if n.native && diffPath != "" {
+		nativeNotify(title, subtitle, message, url, diffPath)
+		return nil
+	}
+	return n.Notify(title, subtitle, message, url)
 }
 
 func appleScriptString(s string) string {
